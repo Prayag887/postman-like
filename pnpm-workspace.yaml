@@ -1,0 +1,6 @@
+packages:
+  - apps/*
+  - packages/*
+minimumReleaseAgeExclude:
+  - react-dom@19.2.8
+  - react@19.2.8

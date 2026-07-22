@@ -1,0 +1,12 @@
+{
+  "name": "apiqa-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "dev": "pnpm --dir apps/desktop tauri dev",
+    "build": "pnpm --dir apps/desktop tauri build",
+    "check": "cargo test --workspace && pnpm --dir apps/desktop check && pnpm --dir apps/desktop build",
+    "format": "cargo fmt --all && pnpm --dir apps/desktop format"
+  }
+}

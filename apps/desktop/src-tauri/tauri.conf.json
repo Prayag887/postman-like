@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "APIQA",
+  "version": "0.1.0",
+  "identifier": "dev.prayag.apiqa",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "APIQA",
+        "width": 1320,
+        "height": 840,
+        "minWidth": 900,
+        "minHeight": 620,
+        "backgroundColor": "#0b0b0d"
+      }
+    ],
+    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Time-travel QA for APIs",
+    "longDescription": "Import Postman collections, automate API runs, and compare response history to catch regressions."
+  }
+}

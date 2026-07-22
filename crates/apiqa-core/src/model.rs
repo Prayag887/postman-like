@@ -1,0 +1,161 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BodyKind {
+    None,
+    Raw,
+    UrlEncoded,
+    FormData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KeyValue {
+    pub key: String,
+    pub value: String,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApiRequest {
+    pub id: String,
+    pub collection_id: String,
+    pub folder_path: Vec<String>,
+    pub name: String,
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<KeyValue>,
+    pub query: Vec<KeyValue>,
+    pub body_kind: BodyKind,
+    pub body: Option<String>,
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Collection {
+    pub id: String,
+    pub name: String,
+    pub requests: Vec<ApiRequest>,
+    pub variables: Vec<KeyValue>,
+    pub imported_at: DateTime<Utc>,
+    pub import_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Environment {
+    pub id: String,
+    pub name: String,
+    pub variables: Vec<KeyValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResponseSnapshot {
+    pub status: u16,
+    pub headers: Vec<KeyValue>,
+    pub content_type: Option<String>,
+    pub body: String,
+    pub body_size: u64,
+    pub duration_ms: u64,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionState {
+    Passed,
+    Changed,
+    TransportFailed,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RequestExecution {
+    pub id: String,
+    pub run_id: String,
+    pub request_id: String,
+    pub request_name: String,
+    pub state: ExecutionState,
+    pub started_at: DateTime<Utc>,
+    pub response: Option<ResponseSnapshot>,
+    pub error: Option<String>,
+    pub comparison: Option<ResponseComparison>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    Running,
+    Completed,
+    CompletedWithFindings,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Run {
+    pub id: String,
+    pub collection_id: String,
+    pub collection_name: String,
+    pub environment_name: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub state: RunState,
+    pub baseline_run_id: Option<String>,
+    pub executions: Vec<RequestExecution>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DifferenceKind {
+    Status,
+    Header,
+    Added,
+    Removed,
+    TypeChanged,
+    ValueChanged,
+    TextChanged,
+    Timing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Difference {
+    pub kind: DifferenceKind,
+    pub path: String,
+    pub baseline: Option<Value>,
+    pub current: Option<Value>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResponseComparison {
+    pub changed: bool,
+    pub differences: Vec<Difference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RunOptions {
+    pub environment: Option<Environment>,
+    pub baseline_run_id: Option<String>,
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+    #[serde(default)]
+    pub stop_on_error: bool,
+}
+
+fn default_timeout() -> u64 {
+    30_000
+}
+
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            environment: None,
+            baseline_run_id: None,
+            timeout_ms: default_timeout(),
+            stop_on_error: false,
+        }
+    }
+}

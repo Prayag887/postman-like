@@ -1,0 +1,11 @@
+[package]
+name = "apiqa"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+apiqa-core = { path = "../../crates/apiqa-core" }
+serde_json.workspace = true
+tokio.workspace = true
