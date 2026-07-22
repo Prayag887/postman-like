@@ -359,6 +359,23 @@ main {
   padding: 12px 18px;
   margin-top: 10px;
 }
+.secondary {
+  border: 1px solid #34343b;
+  border-radius: 7px;
+  background: #18181c;
+  color: #d1d1d7;
+  padding: 9px 13px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.secondary:hover {
+  background: #222228;
+}
+.head-actions {
+  display: flex;
+  gap: 9px;
+}
 .workspace {
   padding: 31px 34px 60px;
   max-width: 1480px;
@@ -423,6 +440,18 @@ main {
   display: flex;
   align-items: center;
   gap: 11px;
+}
+.request-row {
+  width: 100%;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.request-row:hover {
+  background: #1b1b20;
 }
 .request-row:last-child,
 .run-row:last-child {
@@ -816,6 +845,96 @@ main {
 .extraction small {
   font-size: 8px;
   color: #676f7c;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(5px);
+}
+.dialog {
+  width: min(640px, 100%);
+  max-height: calc(100vh - 56px);
+  overflow: auto;
+  padding: 23px;
+  border: 1px solid #34343b;
+  border-radius: 12px;
+  background: #151519;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+.settings-dialog {
+  width: min(480px, 100%);
+}
+.dialog-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.dialog-title h2 {
+  margin: 2px 0 0;
+  font-size: 21px;
+}
+.dialog label {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0;
+  color: #a6a6ae;
+  font-size: 11px;
+}
+.dialog input,
+.dialog select,
+.dialog textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #34343b;
+  border-radius: 7px;
+  background: #0d0d0f;
+  color: #ededf0;
+  padding: 10px 11px;
+  font: inherit;
+}
+.dialog textarea {
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+  line-height: 1.55;
+}
+.request-target {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+}
+.dialog-note,
+.settings-dialog > p {
+  color: #797983;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.dialog-note code {
+  color: #f7a46b;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 20px;
+}
+.success-message {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 7px;
+  background: #102219;
+  color: var(--green);
+  font-size: 11px;
+}
+.success-message svg {
+  width: 15px;
 }
 @media (max-width: 1050px) {
   .split,

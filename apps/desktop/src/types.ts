@@ -14,6 +14,9 @@ export interface ApiRequest {
   query: KeyValue[];
   body_kind: string;
   body?: string;
+  auth: { type: string; [key: string]: unknown };
+  assertions: unknown[];
+  extractions: unknown[];
   disabled: boolean;
 }
 export interface Collection {
@@ -71,4 +74,13 @@ export interface Run {
   baseline_run_id?: string;
   executions: Execution[];
   pinned: boolean;
+}
+export interface RetentionPolicy {
+  days: number;
+  max_bytes?: number;
+}
+export interface CleanupResult {
+  deleted_runs: number;
+  deleted_blobs: number;
+  reclaimed_bytes: number;
 }

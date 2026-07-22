@@ -1,3 +1,4 @@
+mod bundle;
 mod compare;
 mod engine;
 mod import;
@@ -5,6 +6,7 @@ mod model;
 mod report;
 mod storage;
 
+pub use bundle::{ProjectBundle, export_project, import_project};
 pub use compare::{ComparisonOptions, compare_responses};
 pub use engine::ApiQaEngine;
 pub use import::{import_postman, import_postman_environment};

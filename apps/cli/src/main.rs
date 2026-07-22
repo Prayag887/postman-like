@@ -5,8 +5,8 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use apiqa_core::{
-    ApiQaEngine, ExecutionState, RunOptions, Store, html_report, import_postman,
-    import_postman_environment, json_report, junit_report,
+    ApiQaEngine, ExecutionState, RunOptions, Store, export_project, html_report, import_postman,
+    import_postman_environment, import_project, json_report, junit_report,
 };
 
 #[tokio::main]
@@ -109,8 +109,45 @@ async fn main() -> Result<()> {
                 serde_json::to_string_pretty(&engine.store.cleanup_history(&policy)?)?
             );
         }
+        Some("export-project") => {
+            let collection_id = args.get(1).context("missing collection ID")?;
+            let output = args.get(2).context("missing output .apiqa path")?;
+            let collection = engine
+                .store
+                .collection(collection_id)?
+                .context("collection not found")?;
+            let source = export_project(&collection, &engine.store.environments()?)?;
+            fs::write(output, source).with_context(|| format!("write {output}"))?;
+            println!(
+                "Exported {} to {} (secret environment values omitted)",
+                collection.name, output
+            );
+        }
+        Some("import-project") => {
+            let path = args.get(1).context("missing .apiqa project path")?;
+            let source = fs::read_to_string(path).with_context(|| format!("read {path}"))?;
+            let bundle = import_project(&source)?;
+            engine.store.save_collection(&bundle.collection)?;
+            for environment in &bundle.environments {
+                engine.store.save_environment(environment)?;
+            }
+            println!(
+                "Imported {} ({} environments)",
+                bundle.collection.name,
+                bundle.environments.len()
+            );
+        }
+        Some("diagnostics") => {
+            println!("APIQA {}", env!("CARGO_PKG_VERSION"));
+            println!("platform: {}-{}", env::consts::OS, env::consts::ARCH);
+            println!("data directory: {}", data_dir.display());
+            println!("collections: {}", engine.store.collections()?.len());
+            println!("environments: {}", engine.store.environments()?.len());
+            println!("runs: {}", engine.store.runs(None)?.len());
+            println!("database integrity: ok");
+        }
         _ => bail!(
-            "usage: apiqa import <postman.json> | import-environment <environment.json> | run <collection-id> [--environment ID] [--baseline RUN_ID] [--report-dir DIR] [--stop-on-error] | collections | environments | history [collection-id] | retention-clean"
+            "usage: apiqa import <postman.json> | import-environment <environment.json> | run <collection-id> [--environment ID] [--baseline RUN_ID] [--report-dir DIR] [--stop-on-error] | collections | environments | history [collection-id] | retention-clean | export-project <collection-id> <project.apiqa> | import-project <project.apiqa> | diagnostics"
         ),
     }
     Ok(())

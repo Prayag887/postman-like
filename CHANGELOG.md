@@ -2,6 +2,21 @@
 
 All notable changes to APIQA are documented here.
 
+## [0.5.0] - 2026-07-22
+
+### Added
+
+- Accessible in-app request authoring for new and imported endpoints.
+- History retention and storage-limit settings with immediate safe cleanup.
+- Portable `.apiqa` project export and import commands for team handoff.
+- Secret-value omission from exported project environments.
+- Privacy-safe CLI diagnostics for support and database health checks.
+
+### Changed
+
+- Endpoint rows now open directly in the request editor.
+- Pinned baselines remain protected when users clean history manually.
+
 ## [0.4.0] - 2026-07-22
 
 ### Added

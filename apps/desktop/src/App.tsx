@@ -10,10 +10,12 @@ import {
   FolderOpen,
   History,
   Import,
-  Play,
   Pin,
+  Play,
+  Plus,
   Search,
   Settings,
+  X,
 } from "lucide-react";
 import {
   importCollection,
@@ -21,10 +23,21 @@ import {
   listCollections,
   listEnvironments,
   listRuns,
+  cleanupHistory,
+  retentionPolicy,
   runCollection,
+  saveCollection,
+  saveRetentionPolicy,
   setRunPinned,
 } from "./api";
-import type { Collection, Environment, Execution, Run } from "./types";
+import type {
+  ApiRequest,
+  Collection,
+  Environment,
+  Execution,
+  RetentionPolicy,
+  Run,
+} from "./types";
 
 type View = "collections" | "history" | "regressions";
 
@@ -41,6 +54,8 @@ export function App() {
   const [view, setView] = useState<View>("collections");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string>();
+  const [editingRequest, setEditingRequest] = useState<ApiRequest>();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const environmentFileRef = useRef<HTMLInputElement>(null);
 
@@ -110,6 +125,41 @@ export function App() {
     } catch (reason) {
       setError(String(reason));
     }
+  }
+
+  function newRequest() {
+    if (!collection) return;
+    setEditingRequest({
+      id: crypto.randomUUID(),
+      collection_id: collection.id,
+      folder_path: [],
+      name: "New request",
+      method: "GET",
+      url: "https://",
+      headers: [],
+      query: [],
+      body_kind: "none",
+      auth: { type: "none" },
+      assertions: [],
+      extractions: [],
+      disabled: false,
+    });
+  }
+
+  async function persistRequest(request: ApiRequest) {
+    if (!collection) return;
+    const next = {
+      ...collection,
+      requests: [
+        ...collection.requests.filter((item) => item.id !== request.id),
+        request,
+      ],
+    };
+    await saveCollection(next);
+    setCollections((current) =>
+      current.map((item) => (item.id === next.id ? next : item)),
+    );
+    setEditingRequest(undefined);
   }
 
   const summary = useMemo(() => {
@@ -182,11 +232,14 @@ export function App() {
         >
           <Import size={16} /> Import Postman
         </button>
-        <div className="sidebar-footer">
+        <button
+          className="sidebar-footer"
+          onClick={() => setSettingsOpen(true)}
+        >
           <Settings size={16} />
           <span>Settings</span>
           <kbd>⌘,</kbd>
-        </div>
+        </button>
       </aside>
 
       <main>
@@ -247,6 +300,8 @@ export function App() {
             onOpenRun={setActiveRun}
             activeExecution={activeExecution}
             onExecution={setActiveExecution}
+            onNewRequest={newRequest}
+            onEditRequest={setEditingRequest}
           />
         ) : (
           <RunsView
@@ -277,6 +332,22 @@ export function App() {
         accept="application/json,.json"
         onChange={(event) => onEnvironmentImport(event.target.files?.[0])}
       />
+      {editingRequest && (
+        <RequestEditor
+          initial={editingRequest}
+          onClose={() => setEditingRequest(undefined)}
+          onSave={(request) =>
+            persistRequest(request).catch((reason) => setError(String(reason)))
+          }
+        />
+      )}
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => setSettingsOpen(false)}
+          onError={(reason) => setError(String(reason))}
+          onCleaned={() => refresh()}
+        />
+      )}
     </div>
   );
 }
@@ -339,6 +410,8 @@ function CollectionView({
   onOpenRun,
   activeExecution,
   onExecution,
+  onNewRequest,
+  onEditRequest,
 }: {
   collection?: Collection;
   runs: Run[];
@@ -349,6 +422,8 @@ function CollectionView({
   onOpenRun: (run: Run) => void;
   activeExecution?: Execution;
   onExecution: (execution: Execution) => void;
+  onNewRequest: () => void;
+  onEditRequest: (request: ApiRequest) => void;
 }) {
   if (!collection) return null;
   return (
@@ -362,10 +437,15 @@ function CollectionView({
             runs
           </p>
         </div>
-        <button className="primary" disabled={running} onClick={onRun}>
-          <Play size={17} fill="currentColor" />
-          {running ? "Running…" : "Run collection"}
-        </button>
+        <div className="head-actions">
+          <button className="secondary" onClick={onNewRequest}>
+            <Plus size={17} /> New request
+          </button>
+          <button className="primary" disabled={running} onClick={onRun}>
+            <Play size={17} fill="currentColor" />
+            {running ? "Running…" : "Run collection"}
+          </button>
+        </div>
       </section>
       {collection.import_warnings.length > 0 && (
         <div className="warning">
@@ -392,7 +472,11 @@ function CollectionView({
               <span>{collection.requests.length}</span>
             </div>
             {collection.requests.map((request) => (
-              <div className="request-row" key={request.id}>
+              <button
+                className="request-row"
+                key={request.id}
+                onClick={() => onEditRequest(request)}
+              >
                 <span className={methodClass(request.method)}>
                   {request.method}
                 </span>
@@ -401,7 +485,7 @@ function CollectionView({
                   <small>{request.url}</small>
                 </div>
                 <ChevronRight />
-              </div>
+              </button>
             ))}
           </section>
           <section className="panel">
@@ -623,6 +707,222 @@ function RunsView({
             <p>Run a collection to build response history.</p>
           </div>
         )}
+      </section>
+    </div>
+  );
+}
+
+function RequestEditor({
+  initial,
+  onClose,
+  onSave,
+}: {
+  initial: ApiRequest;
+  onClose: () => void;
+  onSave: (request: ApiRequest) => void;
+}) {
+  const [request, setRequest] = useState(initial);
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <form
+        className="dialog request-editor"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="request-editor-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave(request);
+        }}
+      >
+        <div className="dialog-title">
+          <div>
+            <p className="eyebrow">REQUEST</p>
+            <h2 id="request-editor-title">Edit endpoint</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X />
+          </button>
+        </div>
+        <label>
+          Name
+          <input
+            autoFocus
+            required
+            value={request.name}
+            onChange={(event) =>
+              setRequest({ ...request, name: event.target.value })
+            }
+          />
+        </label>
+        <div className="request-target">
+          <label>
+            Method
+            <select
+              value={request.method}
+              onChange={(event) =>
+                setRequest({ ...request, method: event.target.value })
+              }
+            >
+              {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map(
+                (method) => (
+                  <option key={method}>{method}</option>
+                ),
+              )}
+            </select>
+          </label>
+          <label>
+            URL
+            <input
+              required
+              type="url"
+              value={request.url}
+              onChange={(event) =>
+                setRequest({ ...request, url: event.target.value })
+              }
+            />
+          </label>
+        </div>
+        <label>
+          Body type
+          <select
+            value={request.body_kind}
+            onChange={(event) =>
+              setRequest({ ...request, body_kind: event.target.value })
+            }
+          >
+            <option value="none">No body</option>
+            <option value="raw">Raw / JSON</option>
+            <option value="urlencoded">URL encoded</option>
+          </select>
+        </label>
+        {request.body_kind !== "none" && (
+          <label>
+            Request body
+            <textarea
+              rows={10}
+              placeholder={'{\n  "key": "value"\n}'}
+              value={request.body ?? ""}
+              onChange={(event) =>
+                setRequest({ ...request, body: event.target.value })
+              }
+            />
+          </label>
+        )}
+        <p className="dialog-note">
+          Use <code>{"{{variable}}"}</code> in URLs, headers, and bodies.
+          Imported authentication, assertions, and response extractions remain
+          attached.
+        </p>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary">Save request</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function SettingsDialog({
+  onClose,
+  onError,
+  onCleaned,
+}: {
+  onClose: () => void;
+  onError: (reason: unknown) => void;
+  onCleaned: () => void;
+}) {
+  const [policy, setPolicy] = useState<RetentionPolicy>({ days: 30 });
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    retentionPolicy().then(setPolicy).catch(onError);
+  }, []);
+  async function saveAndClean() {
+    try {
+      await saveRetentionPolicy(policy);
+      const result = await cleanupHistory();
+      setMessage(
+        `Cleaned ${result.deleted_runs} runs and reclaimed ${formatBytes(result.reclaimed_bytes)}.`,
+      );
+      onCleaned();
+    } catch (reason) {
+      onError(reason);
+    }
+  }
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="dialog settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-title">
+          <div>
+            <p className="eyebrow">LOCAL STORAGE</p>
+            <h2 id="settings-title">History settings</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="Close">
+            <X />
+          </button>
+        </div>
+        <p>
+          Keep response history long enough to compare weekly releases. Pinned
+          baselines are always protected.
+        </p>
+        <label>
+          Keep run history
+          <select
+            value={policy.days}
+            onChange={(event) =>
+              setPolicy({ ...policy, days: Number(event.target.value) })
+            }
+          >
+            {[7, 14, 30, 60, 90].map((days) => (
+              <option key={days} value={days}>
+                {days} days
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Optional storage limit (GiB)
+          <input
+            type="number"
+            min="1"
+            placeholder="Unlimited"
+            value={policy.max_bytes ? policy.max_bytes / 1073741824 : ""}
+            onChange={(event) =>
+              setPolicy({
+                ...policy,
+                max_bytes: event.target.value
+                  ? Number(event.target.value) * 1073741824
+                  : undefined,
+              })
+            }
+          />
+        </label>
+        {message && (
+          <div className="success-message">
+            <Check /> {message}
+          </div>
+        )}
+        <div className="dialog-actions">
+          <button className="secondary" onClick={onClose}>
+            Close
+          </button>
+          <button className="primary" onClick={saveAndClean}>
+            Save and clean now
+          </button>
+        </div>
       </section>
     </div>
   );

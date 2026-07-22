@@ -25,6 +25,15 @@ fn import_collection(source: String, state: State<'_, AppState>) -> Result<Colle
 }
 
 #[tauri::command]
+fn save_collection(collection: Collection, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .0
+        .store
+        .save_collection(&collection)
+        .map_err(display_error)
+}
+
+#[tauri::command]
 fn import_environment(source: String, state: State<'_, AppState>) -> Result<Environment, String> {
     let environment = import_postman_environment(&source).map_err(display_error)?;
     state
@@ -144,6 +153,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_collections,
             import_collection,
+            save_collection,
             import_environment,
             list_environments,
             run_collection,
