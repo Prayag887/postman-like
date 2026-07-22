@@ -13,7 +13,10 @@ export async function importCollection(source: string): Promise<Collection> {
   return invoke("import_collection", { source });
 }
 
-export async function runCollection(collectionId: string, baselineRunId?: string): Promise<Run> {
+export async function runCollection(
+  collectionId: string,
+  baselineRunId?: string,
+): Promise<Run> {
   return invoke("run_collection", { collectionId, baselineRunId });
 }
 

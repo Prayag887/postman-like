@@ -1,5 +1,6 @@
 /target
-/node_modules
+node_modules/
+*.tsbuildinfo
 /apps/desktop/dist
 /apps/desktop/src-tauri/target
 *.db

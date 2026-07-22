@@ -17,4 +17,3 @@ apiqa-core = { path = "../../../crates/apiqa-core" }
 serde.workspace = true
 tauri = { version = "2.11.5", features = [] }
 tokio.workspace = true
-
