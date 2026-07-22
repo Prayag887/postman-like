@@ -58,4 +58,4 @@ Run exit codes are `0` for unchanged, `2` for response changes, `3` for assertio
 
 ## Release builds
 
-Push a version tag such as `v1.0.1`. GitHub Actions builds and publishes native artifacts for macOS (Apple Silicon and Intel), Windows, and Linux. The default workflow creates unsigned community builds. Before commercial distribution, add a separate signed release job using the Apple notarization and Windows code-signing credentials described by Tauri's platform guides.
+Push a version tag such as `v1.0.2`. GitHub Actions builds and publishes native artifacts for macOS (Apple Silicon and Intel), Windows, and Linux. The default workflow creates unsigned community builds. Before commercial distribution, add a separate signed release job using the Apple notarization and Windows code-signing credentials described by Tauri's platform guides.
