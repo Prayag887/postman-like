@@ -1230,6 +1230,15 @@ main {
 .request-urlbar .send svg {
   width: 13px;
 }
+.url-helper {
+  min-height: 26px;
+  padding: 7px 2px 0;
+  color: #aeb0b8;
+  font-size: 11px;
+}
+.url-helper.error {
+  color: #ff9aaa;
+}
 .inline-warning {
   margin-top: 10px;
   padding: 7px 9px;

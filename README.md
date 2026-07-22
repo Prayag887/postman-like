@@ -6,7 +6,7 @@ APIQA is a local-first, cross-platform API quality-assurance client. Import a Po
 
 - Import Postman Collection v2.0/v2.1 files and Postman environments.
 - View and edit imported collection/environment variables, including separate Postman environment files.
-- Paste cURL commands to create fully populated requests without executing shell code.
+- Paste cURL commands directly into the request URL field to populate the entire request without executing shell code.
 - Browse collections and endpoints in a Postman-style tree, edit requests in place, and copy a live cURL command.
 - Author, edit, and safely delete HTTP requests with variables, bodies, authentication, assertions, and response extraction preserved from imports.
 - Share a complete workspace through a portable `.apiqa-workspace` file; secret-like environment values are removed automatically.
@@ -63,4 +63,4 @@ Run exit codes are `0` for unchanged, `2` for response changes, `3` for assertio
 
 ## Release builds
 
-Push a version tag such as `v1.3.0`. GitHub Actions builds and publishes native artifacts for macOS (Apple Silicon and Intel), Windows, and Linux. The default workflow creates unsigned community builds. Before commercial distribution, add a separate signed release job using the Apple notarization and Windows code-signing credentials described by Tauri's platform guides.
+Push a version tag such as `v1.4.0`. GitHub Actions builds and publishes native artifacts for macOS (Apple Silicon and Intel), Windows, and Linux. The default workflow creates unsigned community builds. Before commercial distribution, add a separate signed release job using the Apple notarization and Windows code-signing credentials described by Tauri's platform guides.

@@ -2,6 +2,22 @@
 
 All notable changes to APIQA are documented here.
 
+## [1.4.0] - 2026-07-22
+
+### Fixed
+
+- Deleting or discarding an unsaved request now immediately selects the next saved request instead of persisting an unchanged collection.
+- Saved-request deletion and left-tree deletion now use one consistent in-app confirmation flow and update the tree immediately.
+
+### Changed
+
+- Removed the separate cURL import action. Paste a complete cURL command directly into the main request URL field to populate the method, URL, parameters, headers, authentication, body, and generated cURL panel.
+- Added a visible URL-field hint and inline parsing feedback.
+
+### Tests
+
+- Added frontend regression tests for saved and unsaved deletion and complete cURL field mapping.
+
 ## [1.3.0] - 2026-07-22
 
 ### Added

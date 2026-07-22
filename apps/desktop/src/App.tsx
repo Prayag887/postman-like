@@ -6,7 +6,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  ClipboardPaste,
   Copy,
   Database,
   Download,
@@ -55,6 +54,22 @@ type View = "collections" | "history" | "regressions";
 
 const methodClass = (method: string) => `method method-${method.toLowerCase()}`;
 
+export function removeRequestAndChooseNext(
+  requests: ApiRequest[],
+  requestId: string,
+): { requests: ApiRequest[]; next?: ApiRequest; removed: boolean } {
+  const index = requests.findIndex((item) => item.id === requestId);
+  if (index < 0) {
+    return { requests, next: requests[0], removed: false };
+  }
+  const remaining = requests.filter((item) => item.id !== requestId);
+  return {
+    requests: remaining,
+    next: remaining[index] ?? remaining[index - 1],
+    removed: true,
+  };
+}
+
 export function App() {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -70,7 +85,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [environmentsOpen, setEnvironmentsOpen] = useState(false);
-  const [curlOpen, setCurlOpen] = useState(false);
+  const [requestToDelete, setRequestToDelete] = useState<ApiRequest>();
   const fileRef = useRef<HTMLInputElement>(null);
   const environmentFileRef = useRef<HTMLInputElement>(null);
   const workspaceFileRef = useRef<HTMLInputElement>(null);
@@ -213,14 +228,6 @@ export function App() {
     });
   }
 
-  function newRequestFromCurl(source: string) {
-    if (!collection) return;
-    const request = parseCurl(source, collection.id);
-    setEditingRequest(request);
-    setCurlOpen(false);
-    setView("collections");
-  }
-
   async function persistEnvironment(environment: Environment) {
     await saveEnvironment(environment);
     setEnvironments((current) => [
@@ -258,18 +265,19 @@ export function App() {
 
   async function deleteRequest(request: ApiRequest) {
     if (!collection) return;
-    const index = collection.requests.findIndex(
-      (item) => item.id === request.id,
-    );
-    const next = {
-      ...collection,
-      requests: collection.requests.filter((item) => item.id !== request.id),
-    };
+    const result = removeRequestAndChooseNext(collection.requests, request.id);
+    if (!result.removed) {
+      setEditingRequest(result.next);
+      setRequestToDelete(undefined);
+      return;
+    }
+    const next = { ...collection, requests: result.requests };
     await saveCollection(next);
     setCollections((current) =>
       current.map((item) => (item.id === next.id ? next : item)),
     );
-    setEditingRequest(next.requests[index] ?? next.requests[index - 1]);
+    setEditingRequest(result.next);
+    setRequestToDelete(undefined);
   }
 
   const summary = useMemo(() => {
@@ -292,7 +300,7 @@ export function App() {
             <Activity size={18} />
           </div>
           <span>APIQA</span>
-          <em>1.3</em>
+          <em>1.4</em>
         </div>
         <nav>
           <Nav
@@ -354,15 +362,7 @@ export function App() {
                       setActiveRun(undefined);
                     }}
                     onDelete={(request) => {
-                      if (
-                        window.confirm(
-                          `Delete “${request.name}”? Existing run history will be preserved.`,
-                        )
-                      ) {
-                        deleteRequest(request).catch((reason) =>
-                          setError(String(reason)),
-                        );
-                      }
+                      setRequestToDelete(request);
                     }}
                   />
                   <button className="tree-new" onClick={() => newRequest()}>
@@ -378,12 +378,6 @@ export function App() {
           onClick={() => fileRef.current?.click()}
         >
           <Import size={16} /> Import Postman
-        </button>
-        <button
-          className="import-side curl-side"
-          onClick={() => setCurlOpen(true)}
-        >
-          <ClipboardPaste size={16} /> Import cURL
         </button>
         <button
           className="sidebar-footer"
@@ -475,9 +469,7 @@ export function App() {
                 setError(String(reason)),
               )
             }
-            onDeleteRequest={(request) =>
-              deleteRequest(request).catch((reason) => setError(String(reason)))
-            }
+            onDeleteRequest={(request) => setRequestToDelete(request)}
           />
         ) : (
           <RunsView
@@ -551,11 +543,20 @@ export function App() {
           onClose={() => setEnvironmentsOpen(false)}
         />
       )}
-      {curlOpen && (
-        <CurlImportDialog
-          onClose={() => setCurlOpen(false)}
-          onImport={newRequestFromCurl}
-          onError={(reason) => setError(String(reason))}
+      {requestToDelete && (
+        <DeleteRequestDialog
+          request={requestToDelete}
+          saved={
+            !!collection?.requests.some(
+              (item) => item.id === requestToDelete.id,
+            )
+          }
+          onCancel={() => setRequestToDelete(undefined)}
+          onConfirm={() =>
+            deleteRequest(requestToDelete).catch((reason) =>
+              setError(String(reason)),
+            )
+          }
         />
       )}
     </div>
@@ -865,13 +866,13 @@ function RequestWorkspace({
   const [draft, setDraft] = useState(request);
   const [tab, setTab] = useState<RequestTab>("params");
   const [copied, setCopied] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [sending, setSending] = useState(false);
   const [response, setResponse] = useState<Execution>();
+  const [curlPasteError, setCurlPasteError] = useState<string>();
   useEffect(() => {
     setDraft(request);
-    setConfirmDelete(false);
     setResponse(undefined);
+    setCurlPasteError(undefined);
   }, [request?.id]);
   const curl = useMemo(() => (draft ? requestToCurl(draft) : ""), [draft]);
   const persisted =
@@ -880,6 +881,21 @@ function RequestWorkspace({
     !!draft &&
     !!request &&
     (!persisted || JSON.stringify(draft) !== JSON.stringify(request));
+
+  function applyPastedCurl(source: string) {
+    try {
+      const imported = parseCurl(source, collection.id);
+      setDraft({
+        ...imported,
+        id: draft!.id,
+        collection_id: draft!.collection_id,
+        folder_path: draft!.folder_path,
+      });
+      setCurlPasteError(undefined);
+    } catch (reason) {
+      setCurlPasteError(String(reason));
+    }
+  }
 
   if (!draft) {
     return (
@@ -956,7 +972,7 @@ function RequestWorkspace({
           </button>
           <button
             className="context-delete"
-            onClick={() => setConfirmDelete(true)}
+            onClick={() => onDelete(draft)}
             title="Delete request"
           >
             <Trash2 />
@@ -996,11 +1012,23 @@ function RequestWorkspace({
                 setDraft({ ...draft, url: event.target.value })
               }
               aria-label="Request URL"
+              placeholder="Enter a URL or paste a complete cURL command"
+              onPaste={(event) => {
+                const source = event.clipboardData.getData("text").trim();
+                if (/^(?:\$\s*)?curl(?:\s|$)/i.test(source)) {
+                  event.preventDefault();
+                  applyPastedCurl(source.replace(/^\$\s*/, ""));
+                }
+              }}
               spellCheck={false}
             />
             <button className="primary send" type="submit" disabled={sending}>
               <Play /> {sending ? "Sending…" : "Send"}
             </button>
+          </div>
+          <div className={curlPasteError ? "url-helper error" : "url-helper"}>
+            {curlPasteError ??
+              "Paste a URL or a complete cURL command here. cURL fills every request field automatically."}
           </div>
 
           {collection.import_warnings.length > 0 && (
@@ -1212,41 +1240,6 @@ function RequestWorkspace({
           </p>
         </div>
       </aside>
-
-      {confirmDelete && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onMouseDown={() => setConfirmDelete(false)}
-        >
-          <section
-            className="dialog delete-dialog"
-            role="alertdialog"
-            aria-modal="true"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="delete-mark">
-              <Trash2 />
-            </div>
-            <h2>Delete “{draft.name}”?</h2>
-            <p>
-              The endpoint will be removed from this collection. Existing run
-              history remains available until its retention date.
-            </p>
-            <div className="dialog-actions">
-              <button
-                className="secondary"
-                onClick={() => setConfirmDelete(false)}
-              >
-                Cancel
-              </button>
-              <button className="danger" onClick={() => onDelete(draft)}>
-                <Trash2 /> Delete request
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
     </div>
   );
 }
@@ -1673,6 +1666,49 @@ function RunsView({
   );
 }
 
+function DeleteRequestDialog({
+  request,
+  saved,
+  onCancel,
+  onConfirm,
+}: {
+  request: ApiRequest;
+  saved: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}>
+      <section
+        className="dialog delete-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="delete-mark">
+          <Trash2 />
+        </div>
+        <h2>
+          {saved ? "Delete" : "Discard"} “{request.name}”?
+        </h2>
+        <p>
+          {saved
+            ? "The endpoint will be removed from this collection. Existing run history remains available until its retention date."
+            : "This new request has not been saved yet. It will be discarded immediately."}
+        </p>
+        <div className="dialog-actions">
+          <button className="secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="danger" onClick={onConfirm}>
+            <Trash2 /> {saved ? "Delete request" : "Discard request"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function EnvironmentDialog({
   collection,
   environments,
@@ -1820,75 +1856,7 @@ function EnvironmentDialog({
   );
 }
 
-function CurlImportDialog({
-  onClose,
-  onImport,
-  onError,
-}: {
-  onClose: () => void;
-  onImport: (source: string) => void;
-  onError: (reason: unknown) => void;
-}) {
-  const [source, setSource] = useState("");
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <form
-        className="dialog curl-dialog"
-        role="dialog"
-        aria-modal="true"
-        onMouseDown={(event) => event.stopPropagation()}
-        onSubmit={(event) => {
-          event.preventDefault();
-          try {
-            onImport(source);
-          } catch (reason) {
-            onError(reason);
-          }
-        }}
-      >
-        <div className="dialog-title">
-          <div>
-            <p className="eyebrow">IMPORT REQUEST</p>
-            <h2>Paste cURL</h2>
-          </div>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <X />
-          </button>
-        </div>
-        <p>
-          Paste a cURL command. APIQA will fill the method, URL, query
-          parameters, headers, authentication, and body without executing the
-          command.
-        </p>
-        <textarea
-          autoFocus
-          required
-          value={source}
-          onChange={(event) => setSource(event.target.value)}
-          placeholder={
-            "curl --request POST 'https://api.example.com/users' \\\n  --header 'Content-Type: application/json' \\\n  --data '{\"name\":\"Ada\"}'"
-          }
-          spellCheck={false}
-        />
-        <div className="dialog-actions">
-          <button type="button" className="secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="primary">
-            <ClipboardPaste /> Import request
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function parseCurl(source: string, collectionId: string): ApiRequest {
+export function parseCurl(source: string, collectionId: string): ApiRequest {
   const tokens = tokenizeShell(source.trim());
   const curlIndex = tokens.findIndex(
     (token) => token === "curl" || token.endsWith("/curl"),
