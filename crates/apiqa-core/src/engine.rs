@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 use crate::{
     ApiKeyLocation, ApiRequest, AssertionResult, Auth, BodyKind, Collection, ComparisonOptions,
-    ExecutionState, KeyValue, RequestExecution, ResponseAssertion, ResponseSnapshot, Run,
-    RunOptions, RunState, Store, compare_responses,
+    ExecutionState, ExtractedValue, ExtractionRule, KeyValue, RequestExecution, ResponseAssertion,
+    ResponseSnapshot, Run, RunOptions, RunState, Store, compare_responses,
 };
 
 pub struct ApiQaEngine {
@@ -59,7 +59,7 @@ impl ApiQaEngine {
             client_builder = client_builder.proxy(reqwest::Proxy::all(proxy_url)?);
         }
         let client = client_builder.build()?;
-        let variables = resolve_variables(collection, options.environment.as_ref());
+        let mut variables = resolve_variables(collection, options.environment.as_ref());
         for request in collection
             .requests
             .iter()
@@ -71,6 +71,9 @@ impl ApiQaEngine {
                     .find(|execution| execution.request_id == request.id)
             });
             let execution = execute(&client, &run.id, request, &variables, previous).await;
+            for extracted in &execution.extractions {
+                variables.insert(extracted.name.clone(), extracted.value.clone());
+            }
             let failed = matches!(
                 execution.state,
                 ExecutionState::TransportFailed | ExecutionState::AssertionFailed
@@ -120,6 +123,7 @@ async fn execute(
         Ok(mut response) => {
             response.duration_ms = started.elapsed().as_millis() as u64;
             let assertions = evaluate_assertions(request, &response);
+            let extractions = extract_values(request, &response);
             let assertion_failed = assertions.iter().any(|result| !result.passed);
             let comparison = baseline
                 .and_then(|execution| execution.response.as_ref())
@@ -146,6 +150,7 @@ async fn execute(
                 error: None,
                 comparison,
                 assertions,
+                extractions,
             }
         }
         Err(error) => RequestExecution {
@@ -159,6 +164,7 @@ async fn execute(
             error: Some(format!("{error:#}")),
             comparison: None,
             assertions: vec![],
+            extractions: vec![],
         },
     }
 }
@@ -288,6 +294,47 @@ fn evaluate_assertions(request: &ApiRequest, response: &ResponseSnapshot) -> Vec
         .collect()
 }
 
+fn extract_values(request: &ApiRequest, response: &ResponseSnapshot) -> Vec<ExtractedValue> {
+    request
+        .extractions
+        .iter()
+        .filter_map(|rule| match rule {
+            ExtractionRule::JsonPath { name, path } => {
+                let body: serde_json::Value = serde_json::from_str(&response.body).ok()?;
+                let value = json_path(&body, path)?;
+                Some(ExtractedValue {
+                    name: name.clone(),
+                    value: value
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| value.to_string()),
+                    source: path.clone(),
+                })
+            }
+            ExtractionRule::Header { name, header } => response
+                .headers
+                .iter()
+                .find(|item| item.key.eq_ignore_ascii_case(header))
+                .map(|item| ExtractedValue {
+                    name: name.clone(),
+                    value: item.value.clone(),
+                    source: format!("header:{header}"),
+                }),
+        })
+        .collect()
+}
+
+fn json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut current = value;
+    for segment in path.trim_start_matches("$.").split('.') {
+        if segment.is_empty() {
+            continue;
+        }
+        current = current.get(segment)?;
+    }
+    Some(current)
+}
+
 fn resolve_variables(
     collection: &Collection,
     environment: Option<&crate::Environment>,
@@ -328,7 +375,17 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/health"))
             .and(header("authorization", "Bearer secret"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok":true,"user":{"id":"abc"}})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/abc"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"name":"Ada"})),
+            )
             .mount(&server)
             .await;
         let store = Store::open(":memory:").unwrap();
@@ -339,26 +396,48 @@ mod tests {
             variables: vec![],
             imported_at: Utc::now(),
             import_warnings: vec![],
-            requests: vec![ApiRequest {
-                id: "r1".into(),
-                collection_id: "c1".into(),
-                folder_path: vec![],
-                name: "Health".into(),
-                method: "GET".into(),
-                url: format!("{}/health", server.uri()),
-                headers: vec![],
-                query: vec![],
-                body_kind: BodyKind::None,
-                body: None,
-                auth: Auth::Bearer {
-                    token: "{{token}}".into(),
+            requests: vec![
+                ApiRequest {
+                    id: "r1".into(),
+                    collection_id: "c1".into(),
+                    folder_path: vec![],
+                    name: "Health".into(),
+                    method: "GET".into(),
+                    url: format!("{}/health", server.uri()),
+                    headers: vec![],
+                    query: vec![],
+                    body_kind: BodyKind::None,
+                    body: None,
+                    auth: Auth::Bearer {
+                        token: "{{token}}".into(),
+                    },
+                    assertions: vec![ResponseAssertion::StatusEquals {
+                        expected: 200,
+                        name: "healthy".into(),
+                    }],
+                    extractions: vec![ExtractionRule::JsonPath {
+                        name: "userId".into(),
+                        path: "$.user.id".into(),
+                    }],
+                    disabled: false,
                 },
-                assertions: vec![ResponseAssertion::StatusEquals {
-                    expected: 200,
-                    name: "healthy".into(),
-                }],
-                disabled: false,
-            }],
+                ApiRequest {
+                    id: "r2".into(),
+                    collection_id: "c1".into(),
+                    folder_path: vec![],
+                    name: "User".into(),
+                    method: "GET".into(),
+                    url: format!("{}/users/{{{{userId}}}}", server.uri()),
+                    headers: vec![],
+                    query: vec![],
+                    body_kind: BodyKind::None,
+                    body: None,
+                    auth: Auth::None,
+                    assertions: vec![],
+                    extractions: vec![],
+                    disabled: false,
+                },
+            ],
         };
         engine.store.save_collection(&collection).unwrap();
         let run = engine
@@ -382,5 +461,7 @@ mod tests {
         assert_eq!(run.state, RunState::Completed);
         assert_eq!(run.executions[0].response.as_ref().unwrap().status, 200);
         assert!(run.executions[0].assertions[0].passed);
+        assert_eq!(run.executions[0].extractions[0].value, "abc");
+        assert_eq!(run.executions.len(), 2);
     }
 }

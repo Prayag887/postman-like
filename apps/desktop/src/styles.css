@@ -785,6 +785,38 @@ main {
   color: #8d8d96;
   font-size: 9px;
 }
+.extraction {
+  margin: 10px 14px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #253347;
+  border-radius: 6px;
+  background: #101722;
+}
+.extraction span {
+  font-size: 7px;
+  color: #70a9ff;
+  font-weight: 800;
+}
+.extraction code {
+  font-size: 9px;
+  color: #c3cbd8;
+}
+.extraction strong {
+  font:
+    9px ui-monospace,
+    monospace;
+  color: #e2e8f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.extraction small {
+  font-size: 8px;
+  color: #676f7c;
+}
 @media (max-width: 1050px) {
   .split,
   .report-grid {

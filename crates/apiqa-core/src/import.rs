@@ -5,7 +5,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    ApiKeyLocation, ApiRequest, Auth, BodyKind, Collection, Environment, KeyValue,
+    ApiKeyLocation, ApiRequest, Auth, BodyKind, Collection, Environment, ExtractionRule, KeyValue,
     ResponseAssertion,
 };
 
@@ -141,7 +141,7 @@ fn walk_items(
                 .and_then(|values| serde_json::to_string(&values).ok()),
             BodyKind::None => None,
         };
-        let (assertions, script_warnings) =
+        let (assertions, extractions, script_warnings) =
             parse_assertions(item.get("event").and_then(Value::as_array));
         warnings.extend(
             script_warnings
@@ -180,6 +180,7 @@ fn walk_items(
             body: body_value,
             auth: parse_auth(request.get("auth")),
             assertions,
+            extractions,
             disabled: item
                 .get("disabled")
                 .and_then(Value::as_bool)
@@ -225,11 +226,18 @@ fn parse_auth(value: Option<&Value>) -> Auth {
     }
 }
 
-fn parse_assertions(events: Option<&Vec<Value>>) -> (Vec<ResponseAssertion>, Vec<String>) {
+fn parse_assertions(
+    events: Option<&Vec<Value>>,
+) -> (Vec<ResponseAssertion>, Vec<ExtractionRule>, Vec<String>) {
     let status_pattern =
         Regex::new(r#"pm\.response\.to\.have\.status\((\d{3})\)"#).expect("status regex");
     let name_pattern = Regex::new(r#"pm\.test\(\s*[\"']([^\"']+)[\"']"#).expect("name regex");
+    let extraction_pattern = Regex::new(
+        r#"pm\.(?:environment|collectionVariables|variables)\.set\(\s*[\"']([^\"']+)[\"']\s*,\s*pm\.response\.json\(\)\.([A-Za-z0-9_.]+)\s*\)"#,
+    )
+    .expect("extraction regex");
     let mut assertions = Vec::new();
+    let mut extractions = Vec::new();
     let mut warnings = Vec::new();
     for event in events
         .into_iter()
@@ -257,11 +265,18 @@ fn parse_assertions(events: Option<&Vec<Value>>) -> (Vec<ResponseAssertion>, Vec
             assertions.push(ResponseAssertion::StatusEquals { expected, name });
             matched += 1;
         }
+        for capture in extraction_pattern.captures_iter(&lines) {
+            extractions.push(ExtractionRule::JsonPath {
+                name: capture[1].to_string(),
+                path: format!("$.{}", &capture[2]),
+            });
+            matched += 1;
+        }
         if !lines.trim().is_empty() && matched == 0 {
             warnings.push("unsupported test script was skipped".into());
         }
     }
-    (assertions, warnings)
+    (assertions, extractions, warnings)
 }
 
 fn parse_url(value: Option<&Value>) -> String {

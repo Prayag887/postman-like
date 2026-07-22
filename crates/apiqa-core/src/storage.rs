@@ -383,6 +383,7 @@ mod tests {
                 error: None,
                 comparison: None,
                 assertions: Vec::<AssertionResult>::new(),
+                extractions: vec![],
             }],
         }
     }

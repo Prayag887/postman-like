@@ -1,7 +1,13 @@
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
-use apiqa_core::{ApiQaEngine, RunOptions, Store, import_postman};
+use apiqa_core::{
+    ApiQaEngine, ExecutionState, RunOptions, Store, html_report, import_postman,
+    import_postman_environment, json_report, junit_report,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -11,40 +17,116 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| PathBuf::from(".apiqa"));
     fs::create_dir_all(&data_dir)?;
     let engine = ApiQaEngine::new(Store::open(data_dir.join("apiqa.db"))?);
-    match args.as_slice() {
-        [command, path] if command == "import" => {
+    match args.first().map(String::as_str) {
+        Some("import") => {
+            let path = args.get(1).context("missing Postman collection path")?;
             let source = fs::read_to_string(path).with_context(|| format!("read {path}"))?;
             let collection = import_postman(&source)?;
             engine.store.save_collection(&collection)?;
             println!(
-                "Imported {} ({} requests)",
+                "Imported {} ({} requests, {} warnings)",
                 collection.name,
-                collection.requests.len()
+                collection.requests.len(),
+                collection.import_warnings.len()
             );
         }
-        [command, collection_id] if command == "run" => {
+        Some("import-environment") => {
+            let path = args.get(1).context("missing Postman environment path")?;
+            let source = fs::read_to_string(path).with_context(|| format!("read {path}"))?;
+            let environment = import_postman_environment(&source)?;
+            engine.store.save_environment(&environment)?;
+            println!("Imported environment {}", environment.name);
+        }
+        Some("run") => {
+            let collection_id = args.get(1).context("missing collection ID")?;
             let collection = engine
                 .store
                 .collection(collection_id)?
                 .context("collection not found")?;
+            let environment = flag_value(&args, "--environment")
+                .map(|id| {
+                    engine
+                        .store
+                        .environments()
+                        .map(|items| items.into_iter().find(|item| item.id == id))
+                })
+                .transpose()?
+                .flatten();
             let run = engine
-                .run_collection(&collection, RunOptions::default())
+                .run_collection(
+                    &collection,
+                    RunOptions {
+                        environment,
+                        baseline_run_id: flag_value(&args, "--baseline").map(str::to_string),
+                        stop_on_error: args.iter().any(|arg| arg == "--stop-on-error"),
+                        ..Default::default()
+                    },
+                )
                 .await?;
-            println!("{}", serde_json::to_string_pretty(&run)?);
-            if matches!(run.state, apiqa_core::RunState::Failed) {
+            if let Some(directory) = flag_value(&args, "--report-dir") {
+                write_reports(&run, Path::new(directory))?;
+                eprintln!("Reports written to {directory}");
+            }
+            println!("{}", json_report(&run)?);
+            if run
+                .executions
+                .iter()
+                .any(|item| item.state == ExecutionState::TransportFailed)
+            {
                 std::process::exit(4);
             }
-            if matches!(run.state, apiqa_core::RunState::CompletedWithFindings) {
+            if run
+                .executions
+                .iter()
+                .any(|item| item.state == ExecutionState::AssertionFailed)
+            {
+                std::process::exit(3);
+            }
+            if run
+                .executions
+                .iter()
+                .any(|item| item.state == ExecutionState::Changed)
+            {
                 std::process::exit(2);
             }
         }
-        [command] if command == "collections" => {
+        Some("collections") => println!(
+            "{}",
+            serde_json::to_string_pretty(&engine.store.collections()?)?
+        ),
+        Some("environments") => println!(
+            "{}",
+            serde_json::to_string_pretty(&engine.store.environments()?)?
+        ),
+        Some("history") => println!(
+            "{}",
+            serde_json::to_string_pretty(&engine.store.runs(args.get(1).map(String::as_str))?)?
+        ),
+        Some("retention-clean") => {
+            let policy = engine.store.retention_policy()?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&engine.store.collections()?)?
+                serde_json::to_string_pretty(&engine.store.cleanup_history(&policy)?)?
             );
         }
-        _ => bail!("usage: apiqa import <postman.json> | run <collection-id> | collections"),
+        _ => bail!(
+            "usage: apiqa import <postman.json> | import-environment <environment.json> | run <collection-id> [--environment ID] [--baseline RUN_ID] [--report-dir DIR] [--stop-on-error] | collections | environments | history [collection-id] | retention-clean"
+        ),
     }
+    Ok(())
+}
+
+fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|index| args.get(index + 1))
+        .map(String::as_str)
+}
+
+fn write_reports(run: &apiqa_core::Run, directory: &Path) -> Result<()> {
+    fs::create_dir_all(directory)?;
+    fs::write(directory.join("apiqa-report.json"), json_report(run)?)?;
+    fs::write(directory.join("apiqa-report.html"), html_report(run))?;
+    fs::write(directory.join("apiqa-report.junit.xml"), junit_report(run))?;
     Ok(())
 }

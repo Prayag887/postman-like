@@ -36,6 +36,8 @@ pub struct ApiRequest {
     #[serde(default)]
     pub assertions: Vec<ResponseAssertion>,
     #[serde(default)]
+    pub extractions: Vec<ExtractionRule>,
+    #[serde(default)]
     pub disabled: bool,
 }
 
@@ -76,6 +78,20 @@ pub struct AssertionResult {
     pub name: String,
     pub passed: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum ExtractionRule {
+    JsonPath { name: String, path: String },
+    Header { name: String, header: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExtractedValue {
+    pub name: String,
+    pub value: String,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -131,6 +147,8 @@ pub struct RequestExecution {
     pub comparison: Option<ResponseComparison>,
     #[serde(default)]
     pub assertions: Vec<AssertionResult>,
+    #[serde(default)]
+    pub extractions: Vec<ExtractedValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

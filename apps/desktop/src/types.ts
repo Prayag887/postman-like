@@ -58,6 +58,7 @@ export interface Execution {
   error?: string;
   comparison?: ResponseComparison;
   assertions: { name: string; passed: boolean; message: string }[];
+  extractions: { name: string; value: string; source: string }[];
 }
 export interface Run {
   id: string;

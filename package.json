@@ -1,7 +1,7 @@
 {
   "name": "apiqa-workspace",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "packageManager": "pnpm@11.5.2",
   "scripts": {
     "dev": "pnpm --dir apps/desktop tauri dev",

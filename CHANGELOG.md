@@ -2,6 +2,23 @@
 
 All notable changes to APIQA are documented here.
 
+## [0.4.0] - 2026-07-22
+
+### Added
+
+- Run-scoped JSON-path and response-header extraction rules.
+- Safe translation of common Postman variable extraction scripts.
+- Serial value chaining from one response into later request URLs, headers, auth, queries, and bodies.
+- CLI environment and explicit baseline selection.
+- Redacted HTML, JSON, and JUnit automation reports.
+- Stable CI exit codes for regression, assertion, and transport failures.
+- CLI history, environment listing, and retention-clean commands.
+- Extracted-value visibility in desktop run details.
+
+### Security
+
+- Extracted runtime values are redacted from exported JSON reports.
+
 ## [0.3.0] - 2026-07-22
 
 ### Added

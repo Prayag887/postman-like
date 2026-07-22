@@ -554,6 +554,17 @@ function ExecutionDetail({ execution }: { execution: Execution }) {
           </div>
         </div>
       ))}
+      {execution.extractions?.map((extraction) => (
+        <div
+          className="extraction"
+          key={`${extraction.name}-${extraction.source}`}
+        >
+          <span>EXTRACTED</span>
+          <code>{extraction.name}</code>
+          <strong>{extraction.value}</strong>
+          <small>{extraction.source}</small>
+        </div>
+      ))}
       {execution.comparison?.differences.map((difference, index) => (
         <div className="difference" key={`${difference.path}-${index}`}>
           <div>
