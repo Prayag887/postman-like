@@ -2,6 +2,19 @@
 
 All notable changes to APIQA are documented here.
 
+## [1.0.0] - 2026-07-22
+
+### Added
+
+- Production release workflow for native macOS Apple Silicon, macOS Intel, Windows, and Linux installers.
+- Automated GitHub Release creation and consistently named platform assets.
+- User installation, first-run, CLI automation, privacy, and security documentation.
+
+### Changed
+
+- Promoted the desktop application from beta to the stable 1.0 product line.
+- Release packaging now supports optional Apple notarization and updater-signing credentials.
+
 ## [0.5.0] - 2026-07-22
 
 ### Added

@@ -182,7 +182,7 @@ export function App() {
             <Activity size={18} />
           </div>
           <span>APIQA</span>
-          <em>beta</em>
+          <em>1.0</em>
         </div>
         <nav>
           <Nav
