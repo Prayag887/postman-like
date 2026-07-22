@@ -50,6 +50,15 @@ fn list_environments(state: State<'_, AppState>) -> Result<Vec<Environment>, Str
 }
 
 #[tauri::command]
+fn save_environment(environment: Environment, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .0
+        .store
+        .save_environment(&environment)
+        .map_err(display_error)
+}
+
+#[tauri::command]
 fn export_workspace_bundle(state: State<'_, AppState>) -> Result<String, String> {
     let collections = state.0.store.collections().map_err(display_error)?;
     let environments = state.0.store.environments().map_err(display_error)?;
@@ -249,6 +258,7 @@ pub fn run() {
             save_collection,
             import_environment,
             list_environments,
+            save_environment,
             export_workspace_bundle,
             export_workspace_file,
             import_workspace_bundle,

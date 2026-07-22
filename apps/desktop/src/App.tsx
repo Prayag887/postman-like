@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardPaste,
   Copy,
   Database,
   Download,
@@ -37,6 +38,7 @@ import {
   runCollection,
   runRequest,
   saveCollection,
+  saveEnvironment,
   saveRetentionPolicy,
   setRunPinned,
 } from "./api";
@@ -67,6 +69,8 @@ export function App() {
   const [editingRequest, setEditingRequest] = useState<ApiRequest>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [environmentsOpen, setEnvironmentsOpen] = useState(false);
+  const [curlOpen, setCurlOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const environmentFileRef = useRef<HTMLInputElement>(null);
   const workspaceFileRef = useRef<HTMLInputElement>(null);
@@ -189,11 +193,12 @@ export function App() {
     }
   }
 
-  function newRequest() {
-    if (!collection) return;
+  function newRequest(target = collection) {
+    if (!target) return;
+    setSelected(target.id);
     setEditingRequest({
       id: crypto.randomUUID(),
-      collection_id: collection.id,
+      collection_id: target.id,
       folder_path: [],
       name: "New request",
       method: "GET",
@@ -206,6 +211,33 @@ export function App() {
       extractions: [],
       disabled: false,
     });
+  }
+
+  function newRequestFromCurl(source: string) {
+    if (!collection) return;
+    const request = parseCurl(source, collection.id);
+    setEditingRequest(request);
+    setCurlOpen(false);
+    setView("collections");
+  }
+
+  async function persistEnvironment(environment: Environment) {
+    await saveEnvironment(environment);
+    setEnvironments((current) => [
+      environment,
+      ...current.filter((item) => item.id !== environment.id),
+    ]);
+  }
+
+  async function persistCollectionVariables(
+    variables: Collection["variables"],
+  ) {
+    if (!collection) return;
+    const next = { ...collection, variables };
+    await saveCollection(next);
+    setCollections((current) =>
+      current.map((item) => (item.id === next.id ? next : item)),
+    );
   }
 
   async function persistRequest(request: ApiRequest) {
@@ -260,7 +292,7 @@ export function App() {
             <Activity size={18} />
           </div>
           <span>APIQA</span>
-          <em>1.2</em>
+          <em>1.3</em>
         </div>
         <nav>
           <Nav
@@ -304,6 +336,14 @@ export function App() {
                 <span>{item.name}</span>
                 <small>{item.requests.length}</small>
               </button>
+              <button
+                className="collection-add"
+                title="Add request"
+                aria-label={`Add request to ${item.name}`}
+                onClick={() => newRequest(item)}
+              >
+                <Plus />
+              </button>
               {selected === item.id && view === "collections" && (
                 <div className="request-tree">
                   <CollectionRequestTree
@@ -313,8 +353,19 @@ export function App() {
                       setEditingRequest(request);
                       setActiveRun(undefined);
                     }}
+                    onDelete={(request) => {
+                      if (
+                        window.confirm(
+                          `Delete “${request.name}”? Existing run history will be preserved.`,
+                        )
+                      ) {
+                        deleteRequest(request).catch((reason) =>
+                          setError(String(reason)),
+                        );
+                      }
+                    }}
                   />
-                  <button className="tree-new" onClick={newRequest}>
+                  <button className="tree-new" onClick={() => newRequest()}>
                     <Plus /> <span>Add request</span>
                   </button>
                 </div>
@@ -327,6 +378,12 @@ export function App() {
           onClick={() => fileRef.current?.click()}
         >
           <Import size={16} /> Import Postman
+        </button>
+        <button
+          className="import-side curl-side"
+          onClick={() => setCurlOpen(true)}
+        >
+          <ClipboardPaste size={16} /> Import cURL
         </button>
         <button
           className="sidebar-footer"
@@ -373,6 +430,12 @@ export function App() {
               ))}
               <option value="__import">Import environment…</option>
             </select>
+            <button
+              className="environment-button"
+              onClick={() => setEnvironmentsOpen(true)}
+            >
+              Variables
+            </button>
             <button className="share-button" onClick={() => setShareOpen(true)}>
               <Share2 /> Share workspace
             </button>
@@ -405,7 +468,7 @@ export function App() {
             onOpenRun={setActiveRun}
             activeExecution={activeExecution}
             onExecution={setActiveExecution}
-            onNewRequest={newRequest}
+            onNewRequest={() => newRequest()}
             request={editingRequest}
             onSaveRequest={(request) =>
               persistRequest(request).catch((reason) =>
@@ -468,6 +531,33 @@ export function App() {
           onImport={() => workspaceFileRef.current?.click()}
         />
       )}
+      {environmentsOpen && (
+        <EnvironmentDialog
+          collection={collection}
+          environments={environments}
+          activeId={environmentId}
+          onSelect={setEnvironmentId}
+          onImport={() => environmentFileRef.current?.click()}
+          onSaveEnvironment={(environment) =>
+            persistEnvironment(environment).catch((reason) =>
+              setError(String(reason)),
+            )
+          }
+          onSaveCollectionVariables={(variables) =>
+            persistCollectionVariables(variables).catch((reason) =>
+              setError(String(reason)),
+            )
+          }
+          onClose={() => setEnvironmentsOpen(false)}
+        />
+      )}
+      {curlOpen && (
+        <CurlImportDialog
+          onClose={() => setCurlOpen(false)}
+          onImport={newRequestFromCurl}
+          onError={(reason) => setError(String(reason))}
+        />
+      )}
     </div>
   );
 }
@@ -521,10 +611,12 @@ function CollectionRequestTree({
   requests,
   activeId,
   onSelect,
+  onDelete,
 }: {
   requests: ApiRequest[];
   activeId?: string;
   onSelect: (request: ApiRequest) => void;
+  onDelete: (request: ApiRequest) => void;
 }) {
   const root = useMemo(() => buildRequestTree(requests), [requests]);
   return (
@@ -535,6 +627,7 @@ function CollectionRequestTree({
           folder={folder}
           activeId={activeId}
           onSelect={onSelect}
+          onDelete={onDelete}
         />
       ))}
       {root.requests.map((request) => (
@@ -543,6 +636,7 @@ function CollectionRequestTree({
           request={request}
           active={activeId === request.id}
           onSelect={onSelect}
+          onDelete={onDelete}
         />
       ))}
     </>
@@ -553,10 +647,12 @@ function RequestFolder({
   folder,
   activeId,
   onSelect,
+  onDelete,
 }: {
   folder: RequestFolderNode;
   activeId?: string;
   onSelect: (request: ApiRequest) => void;
+  onDelete: (request: ApiRequest) => void;
 }) {
   const containsActive =
     folder.requests.some((item) => item.id === activeId) ||
@@ -580,6 +676,7 @@ function RequestFolder({
               folder={child}
               activeId={activeId}
               onSelect={onSelect}
+              onDelete={onDelete}
             />
           ))}
           {folder.requests.map((request) => (
@@ -588,6 +685,7 @@ function RequestFolder({
               request={request}
               active={activeId === request.id}
               onSelect={onSelect}
+              onDelete={onDelete}
             />
           ))}
         </div>
@@ -607,10 +705,12 @@ function RequestTreeItem({
   request,
   active,
   onSelect,
+  onDelete,
 }: {
   request: ApiRequest;
   active: boolean;
   onSelect: (request: ApiRequest) => void;
+  onDelete: (request: ApiRequest) => void;
 }) {
   return (
     <button
@@ -620,7 +720,26 @@ function RequestTreeItem({
     >
       <ChevronRight className="request-chevron" />
       <span className={methodClass(request.method)}>{request.method}</span>
-      <span>{request.name}</span>
+      <span className="request-name">{request.name}</span>
+      <span
+        className="tree-delete"
+        role="button"
+        tabIndex={0}
+        aria-label={`Delete ${request.name}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onDelete(request);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            onDelete(request);
+          }
+        }}
+      >
+        <Trash2 />
+      </span>
     </button>
   );
 }
@@ -755,8 +874,12 @@ function RequestWorkspace({
     setResponse(undefined);
   }, [request?.id]);
   const curl = useMemo(() => (draft ? requestToCurl(draft) : ""), [draft]);
+  const persisted =
+    !!draft && collection.requests.some((item) => item.id === draft.id);
   const dirty =
-    !!draft && !!request && JSON.stringify(draft) !== JSON.stringify(request);
+    !!draft &&
+    !!request &&
+    (!persisted || JSON.stringify(draft) !== JSON.stringify(request));
 
   if (!draft) {
     return (
@@ -1548,6 +1671,373 @@ function RunsView({
       </section>
     </div>
   );
+}
+
+function EnvironmentDialog({
+  collection,
+  environments,
+  activeId,
+  onSelect,
+  onImport,
+  onSaveEnvironment,
+  onSaveCollectionVariables,
+  onClose,
+}: {
+  collection?: Collection;
+  environments: Environment[];
+  activeId?: string;
+  onSelect: (id?: string) => void;
+  onImport: () => void;
+  onSaveEnvironment: (environment: Environment) => void;
+  onSaveCollectionVariables: (variables: Collection["variables"]) => void;
+  onClose: () => void;
+}) {
+  const [scope, setScope] = useState<"environment" | "collection">(
+    "environment",
+  );
+  const selected =
+    environments.find((item) => item.id === activeId) ?? environments[0];
+  const [draft, setDraft] = useState<Environment | undefined>(selected);
+  const [collectionVariables, setCollectionVariables] = useState(
+    collection?.variables ?? [],
+  );
+  useEffect(() => setDraft(selected), [selected?.id]);
+  useEffect(
+    () => setCollectionVariables(collection?.variables ?? []),
+    [collection?.id],
+  );
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="dialog variables-dialog"
+        role="dialog"
+        aria-modal="true"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-title">
+          <div>
+            <p className="eyebrow">POSTMAN VARIABLES</p>
+            <h2>Environments and variables</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="Close">
+            <X />
+          </button>
+        </div>
+        <div className="variable-toolbar">
+          <button
+            className={scope === "environment" ? "active" : ""}
+            onClick={() => setScope("environment")}
+          >
+            Environment
+          </button>
+          <button
+            className={scope === "collection" ? "active" : ""}
+            onClick={() => setScope("collection")}
+          >
+            Collection variables
+          </button>
+          <button className="secondary import-environment" onClick={onImport}>
+            <Import /> Import Postman environment
+          </button>
+        </div>
+        {scope === "environment" ? (
+          <>
+            <div className="environment-picker">
+              <label>Active environment</label>
+              <select
+                value={draft?.id ?? ""}
+                onChange={(event) => {
+                  const next = environments.find(
+                    (item) => item.id === event.target.value,
+                  );
+                  setDraft(next);
+                  onSelect(next?.id);
+                }}
+              >
+                {!environments.length && (
+                  <option value="">No environment imported</option>
+                )}
+                {environments.map((environment) => (
+                  <option key={environment.id} value={environment.id}>
+                    {environment.name} · {environment.variables.length}{" "}
+                    variables
+                  </option>
+                ))}
+              </select>
+            </div>
+            {draft ? (
+              <KeyValueEditor
+                title={`${draft.name} variables`}
+                rows={draft.variables}
+                onChange={(variables) => setDraft({ ...draft, variables })}
+              />
+            ) : (
+              <div className="variables-empty">
+                <Import />
+                <strong>Import your Postman environment file</strong>
+                <p>
+                  APIQA supports Postman environment JSON files and selects the
+                  imported environment automatically.
+                </p>
+              </div>
+            )}
+            <div className="dialog-actions">
+              <button className="secondary" onClick={onClose}>
+                Close
+              </button>
+              <button
+                className="primary"
+                disabled={!draft}
+                onClick={() => draft && onSaveEnvironment(draft)}
+              >
+                <Save /> Save environment
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <KeyValueEditor
+              title={`${collection?.name ?? "Collection"} variables`}
+              rows={collectionVariables}
+              onChange={setCollectionVariables}
+            />
+            <div className="dialog-actions">
+              <button className="secondary" onClick={onClose}>
+                Close
+              </button>
+              <button
+                className="primary"
+                disabled={!collection}
+                onClick={() => onSaveCollectionVariables(collectionVariables)}
+              >
+                <Save /> Save collection variables
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function CurlImportDialog({
+  onClose,
+  onImport,
+  onError,
+}: {
+  onClose: () => void;
+  onImport: (source: string) => void;
+  onError: (reason: unknown) => void;
+}) {
+  const [source, setSource] = useState("");
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <form
+        className="dialog curl-dialog"
+        role="dialog"
+        aria-modal="true"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          try {
+            onImport(source);
+          } catch (reason) {
+            onError(reason);
+          }
+        }}
+      >
+        <div className="dialog-title">
+          <div>
+            <p className="eyebrow">IMPORT REQUEST</p>
+            <h2>Paste cURL</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X />
+          </button>
+        </div>
+        <p>
+          Paste a cURL command. APIQA will fill the method, URL, query
+          parameters, headers, authentication, and body without executing the
+          command.
+        </p>
+        <textarea
+          autoFocus
+          required
+          value={source}
+          onChange={(event) => setSource(event.target.value)}
+          placeholder={
+            "curl --request POST 'https://api.example.com/users' \\\n  --header 'Content-Type: application/json' \\\n  --data '{\"name\":\"Ada\"}'"
+          }
+          spellCheck={false}
+        />
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary">
+            <ClipboardPaste /> Import request
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function parseCurl(source: string, collectionId: string): ApiRequest {
+  const tokens = tokenizeShell(source.trim());
+  const curlIndex = tokens.findIndex(
+    (token) => token === "curl" || token.endsWith("/curl"),
+  );
+  if (curlIndex < 0) throw new Error("Paste a command that starts with curl");
+  let method = "GET";
+  let url = "";
+  let body: string | undefined;
+  let auth: ApiRequest["auth"] = { type: "none" };
+  const headers: ApiRequest["headers"] = [];
+  for (let index = curlIndex + 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const take = () => tokens[++index] ?? "";
+    if (token === "-X" || token === "--request") method = take().toUpperCase();
+    else if (token.startsWith("--request="))
+      method = token.slice(10).toUpperCase();
+    else if (token === "--url") url = take();
+    else if (token.startsWith("--url=")) url = token.slice(6);
+    else if (["-H", "--header"].includes(token))
+      addCurlHeader(take(), headers, (next) => {
+        auth = next;
+      });
+    else if (token.startsWith("--header="))
+      addCurlHeader(token.slice(9), headers, (next) => {
+        auth = next;
+      });
+    else if (token === "-u" || token === "--user") {
+      const [username, ...password] = take().split(":");
+      auth = { type: "basic", username, password: password.join(":") };
+    } else if (
+      [
+        "-d",
+        "--data",
+        "--data-raw",
+        "--data-binary",
+        "--data-ascii",
+        "--data-urlencode",
+      ].includes(token)
+    ) {
+      body = take();
+      if (method === "GET") method = "POST";
+    } else if (token === "-G" || token === "--get") method = "GET";
+    else if (!token.startsWith("-") && !url) url = token;
+    else if (
+      ["-A", "--user-agent", "-e", "--referer", "-b", "--cookie"].includes(
+        token,
+      )
+    ) {
+      const value = take();
+      const key =
+        token === "-A" || token === "--user-agent"
+          ? "User-Agent"
+          : token === "-e" || token === "--referer"
+            ? "Referer"
+            : "Cookie";
+      headers.push({ key, value, enabled: true });
+    }
+  }
+  if (!url) throw new Error("The cURL command does not contain a URL");
+  const [baseUrl, queryString = ""] = url.split(/\?(.*)/s);
+  const query = queryString
+    ? queryString
+        .split("&")
+        .filter(Boolean)
+        .map((pair) => {
+          const [key, ...value] = pair.split("=");
+          return {
+            key: safeDecode(key),
+            value: safeDecode(value.join("=")),
+            enabled: true,
+          };
+        })
+    : [];
+  const pathName =
+    baseUrl.split("/").filter(Boolean).at(-1)?.replaceAll(/[-_]/g, " ") ||
+    "Imported cURL request";
+  return {
+    id: crypto.randomUUID(),
+    collection_id: collectionId,
+    folder_path: [],
+    name: pathName,
+    method,
+    url: baseUrl,
+    headers,
+    query,
+    body_kind: body === undefined ? "none" : "raw",
+    body,
+    auth,
+    assertions: [],
+    extractions: [],
+    disabled: false,
+  };
+}
+
+function addCurlHeader(
+  source: string,
+  headers: ApiRequest["headers"],
+  setAuth: (auth: ApiRequest["auth"]) => void,
+) {
+  const separator = source.indexOf(":");
+  if (separator < 0) return;
+  const key = source.slice(0, separator).trim();
+  const value = source.slice(separator + 1).trim();
+  if (
+    key.toLowerCase() === "authorization" &&
+    value.toLowerCase().startsWith("bearer ")
+  ) {
+    setAuth({ type: "bearer", token: value.slice(7).trim() });
+  } else headers.push({ key, value, enabled: true });
+}
+
+function tokenizeShell(source: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote = "";
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\" && quote !== "'") {
+      const next = source[index + 1];
+      if (next === "\n" || (next === "\r" && source[index + 2] === "\n")) {
+        index += next === "\r" ? 2 : 1;
+        continue;
+      }
+      if (next !== undefined) {
+        current += next;
+        index += 1;
+      }
+    } else if (character === "'" || character === '"') {
+      if (!quote) quote = character;
+      else if (quote === character) quote = "";
+      else current += character;
+    } else if (/\s/.test(character) && !quote) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+    } else current += character;
+  }
+  if (quote) throw new Error("The cURL command has an unclosed quote");
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function safeDecode(value: string) {
+  try {
+    return decodeURIComponent(value.replaceAll("+", " "));
+  } catch {
+    return value;
+  }
 }
 
 function ShareWorkspaceDialog({

@@ -285,7 +285,13 @@ fn parse_url(value: Option<&Value>) -> String {
         Some(Value::Object(url)) => url
             .get("raw")
             .and_then(Value::as_str)
-            .map(str::to_string)
+            .map(|raw| {
+                if url.get("query").and_then(Value::as_array).is_some() {
+                    raw.split('?').next().unwrap_or(raw).to_string()
+                } else {
+                    raw.to_string()
+                }
+            })
             .unwrap_or_else(|| {
                 let protocol = url
                     .get("protocol")
@@ -339,10 +345,15 @@ fn postman_key_value(value: &Value) -> Option<KeyValue> {
                     .unwrap_or_else(|| value.to_string())
             })
             .unwrap_or_default(),
-        enabled: !value
-            .get("disabled")
+        enabled: value
+            .get("enabled")
             .and_then(Value::as_bool)
-            .unwrap_or(false),
+            .unwrap_or_else(|| {
+                !value
+                    .get("disabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            }),
     })
 }
 
@@ -371,11 +382,12 @@ mod tests {
     #[test]
     fn imports_environment_and_safe_status_assertion() {
         let environment = import_postman_environment(
-            r#"{"id":"staging","name":"Staging","values":[{"key":"host","value":"https://example.com","enabled":true}]}"#,
+            r#"{"id":"staging","name":"Staging","values":[{"key":"host","value":"https://example.com","enabled":true},{"key":"disabled","value":"no","enabled":false}]}"#,
         )
         .unwrap();
         assert_eq!(environment.id, "staging");
         assert!(environment.variables[0].enabled);
+        assert!(!environment.variables[1].enabled);
 
         let collection = import_postman(
             r#"{"info":{"_postman_id":"stable","name":"Tests","schema":"https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},"item":[{"name":"Health","request":{"method":"GET","url":"https://example.com"},"event":[{"listen":"test","script":{"exec":["pm.test('healthy', function () { pm.response.to.have.status(204); });"]}}]}]}"#,
@@ -383,5 +395,18 @@ mod tests {
         .unwrap();
         assert_eq!(collection.id, "stable");
         assert_eq!(collection.requests[0].assertions.len(), 1);
+    }
+
+    #[test]
+    fn imports_collection_variables_and_structured_query_once() {
+        let collection = import_postman(
+            r#"{"info":{"name":"Variables","schema":"https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},"variable":[{"key":"baseUrl","value":"https://example.com"}],"item":[{"name":"List","request":{"method":"GET","url":{"raw":"{{baseUrl}}/users?page=2","query":[{"key":"page","value":"2"}]}}}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(collection.variables[0].key, "baseUrl");
+        assert_eq!(collection.variables[0].value, "https://example.com");
+        assert_eq!(collection.requests[0].url, "{{baseUrl}}/users");
+        assert_eq!(collection.requests[0].query[0].value, "2");
     }
 }

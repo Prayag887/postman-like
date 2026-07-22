@@ -2,6 +2,25 @@
 
 All notable changes to APIQA are documented here.
 
+## [1.3.0] - 2026-07-22
+
+### Added
+
+- Dedicated environment and collection-variable manager with direct Postman environment-file import.
+- Safe cURL command import that fills method, URL, query parameters, headers, basic or bearer authentication, and request body without executing the command.
+- Direct Add request controls on collections and Delete controls on request rows in the left tree.
+
+### Fixed
+
+- Postman environment values now respect the source file's `enabled` field.
+- Structured Postman query parameters are no longer duplicated in the request URL and query editor.
+- Imported collection variables are now visible and editable in the desktop application.
+
+### Changed
+
+- Increased interface typography and contrast throughout the workspace.
+- Lifted the sidebar, editor, response, and code surfaces to lighter Postman-like neutral backgrounds.
+
 ## [1.2.0] - 2026-07-22
 
 ### Added

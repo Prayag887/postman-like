@@ -65,6 +65,10 @@ export async function importEnvironment(source: string): Promise<Environment> {
   return invoke("import_environment", { source });
 }
 
+export async function saveEnvironment(environment: Environment): Promise<void> {
+  return invoke("save_environment", { environment });
+}
+
 export async function setRunPinned(id: string, pinned: boolean): Promise<void> {
   return invoke("set_run_pinned", { id, pinned });
 }
