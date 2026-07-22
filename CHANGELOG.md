@@ -2,6 +2,13 @@
 
 All notable changes to APIQA are documented here.
 
+## [1.0.1] - 2026-07-22
+
+### Fixed
+
+- Unsigned community builds no longer receive empty signing environment variables.
+- Cross-platform release linking now uses thin LTO and additional codegen units to fit hosted-runner memory limits.
+
 ## [1.0.0] - 2026-07-22
 
 ### Added

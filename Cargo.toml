@@ -3,7 +3,7 @@ members = ["crates/apiqa-core", "apps/desktop/src-tauri", "apps/cli"]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "MIT"
 authors = ["Prayag"]
@@ -26,6 +26,6 @@ url = "2.5.8"
 zstd = "0.13.3"
 
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 4
 strip = true
