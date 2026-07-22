@@ -2,6 +2,24 @@
 
 All notable changes to APIQA are documented here.
 
+## [0.3.0] - 2026-07-22
+
+### Added
+
+- SHA-256 content-addressed response storage with zstd compression.
+- Transparent response hydration when historical runs are opened.
+- Configurable age and size retention policy with a 30-day default.
+- Pinned baselines that are exempt from automatic cleanup.
+- Transactional whole-run cleanup and unreferenced blob garbage collection.
+- Startup database integrity checking.
+- Immutable versioned comparison-rule storage.
+- Desktop commands for pinning, retention settings, and manual cleanup.
+
+### Changed
+
+- Retention cleanup now runs at application startup and after completed runs.
+- Repeated identical response bodies occupy storage only once.
+
 ## [0.2.0] - 2026-07-22
 
 ### Added

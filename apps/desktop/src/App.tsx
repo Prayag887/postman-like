@@ -11,6 +11,7 @@ import {
   History,
   Import,
   Play,
+  Pin,
   Search,
   Settings,
 } from "lucide-react";
@@ -21,6 +22,7 @@ import {
   listEnvironments,
   listRuns,
   runCollection,
+  setRunPinned,
 } from "./api";
 import type { Collection, Environment, Execution, Run } from "./types";
 
@@ -444,6 +446,11 @@ function RunReport({
   active?: Execution;
   onExecution: (execution: Execution) => void;
 }) {
+  const [pinned, setPinned] = useState(run.pinned);
+  async function togglePinned() {
+    await setRunPinned(run.id, !pinned);
+    setPinned(!pinned);
+  }
   return (
     <>
       <div className="report-head">
@@ -457,9 +464,19 @@ function RunReport({
               : "no baseline (first run)"}
           </p>
         </div>
-        <span className={`run-state ${run.state}`}>
-          {run.state.replaceAll("_", " ")}
-        </span>
+        <div className="report-actions">
+          <button
+            className={pinned ? "pin active" : "pin"}
+            onClick={togglePinned}
+            title="Pinned runs are never removed by retention cleanup"
+          >
+            <Pin size={13} />
+            {pinned ? "Pinned" : "Pin baseline"}
+          </button>
+          <span className={`run-state ${run.state}`}>
+            {run.state.replaceAll("_", " ")}
+          </span>
+        </div>
       </div>
       <div className="stats">
         <Stat label="Total" value={summary.total} />

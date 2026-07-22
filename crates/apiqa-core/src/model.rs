@@ -101,6 +101,8 @@ pub struct ResponseSnapshot {
     pub headers: Vec<KeyValue>,
     pub content_type: Option<String>,
     pub body: String,
+    #[serde(default)]
+    pub body_hash: Option<String>,
     pub body_size: u64,
     pub duration_ms: u64,
     pub truncated: bool,
@@ -151,6 +153,40 @@ pub struct Run {
     pub state: RunState,
     pub baseline_run_id: Option<String>,
     pub executions: Vec<RequestExecution>,
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetentionPolicy {
+    pub days: u32,
+    pub max_bytes: Option<u64>,
+}
+
+impl Default for RetentionPolicy {
+    fn default() -> Self {
+        Self {
+            days: 30,
+            max_bytes: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CleanupResult {
+    pub deleted_runs: usize,
+    pub deleted_blobs: usize,
+    pub reclaimed_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ComparisonRule {
+    pub id: String,
+    pub version: u32,
+    pub scope_id: String,
+    pub ignored_json_paths: Vec<String>,
+    pub ignored_headers: Vec<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

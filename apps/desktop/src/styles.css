@@ -559,6 +559,27 @@ main {
   background: #2a151a;
   border-color: #52232c;
 }
+.report-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pin {
+  border: 1px solid var(--line);
+  background: #121216;
+  color: #85858f;
+  border-radius: 5px;
+  padding: 6px 8px;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  font-size: 9px;
+}
+.pin.active {
+  color: var(--orange);
+  border-color: #5b3018;
+  background: #24150c;
+}
 .stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

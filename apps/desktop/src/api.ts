@@ -40,3 +40,7 @@ export async function importEnvironment(source: string): Promise<Environment> {
     throw new Error("Environment import is available in the desktop app");
   return invoke("import_environment", { source });
 }
+
+export async function setRunPinned(id: string, pinned: boolean): Promise<void> {
+  return invoke("set_run_pinned", { id, pinned });
+}

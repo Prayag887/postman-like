@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use apiqa_core::{
-    ApiQaEngine, Collection, Environment, Run, RunOptions, Store, import_postman,
-    import_postman_environment,
+    ApiQaEngine, CleanupResult, Collection, Environment, RetentionPolicy, Run, RunOptions, Store,
+    import_postman, import_postman_environment,
 };
 use tauri::{Manager, State};
 
@@ -89,6 +89,42 @@ fn list_runs(
         .map_err(display_error)
 }
 
+#[tauri::command]
+fn set_run_pinned(id: String, pinned: bool, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .0
+        .store
+        .set_run_pinned(&id, pinned)
+        .map_err(display_error)
+}
+
+#[tauri::command]
+fn retention_policy(state: State<'_, AppState>) -> Result<RetentionPolicy, String> {
+    state.0.store.retention_policy().map_err(display_error)
+}
+
+#[tauri::command]
+fn save_retention_policy(
+    policy: RetentionPolicy,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .0
+        .store
+        .set_retention_policy(&policy)
+        .map_err(display_error)
+}
+
+#[tauri::command]
+fn cleanup_history(state: State<'_, AppState>) -> Result<CleanupResult, String> {
+    let policy = state.0.store.retention_policy().map_err(display_error)?;
+    state
+        .0
+        .store
+        .cleanup_history(&policy)
+        .map_err(display_error)
+}
+
 fn display_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
@@ -100,6 +136,8 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let store = Store::open(data_dir.join("apiqa.db"))?;
+            let policy = store.retention_policy()?;
+            store.cleanup_history(&policy)?;
             app.manage(AppState(Arc::new(ApiQaEngine::new(store))));
             Ok(())
         })
@@ -109,7 +147,11 @@ pub fn run() {
             import_environment,
             list_environments,
             run_collection,
-            list_runs
+            list_runs,
+            set_run_pinned,
+            retention_policy,
+            save_retention_policy,
+            cleanup_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running APIQA");

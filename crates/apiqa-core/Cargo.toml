@@ -17,6 +17,7 @@ thiserror.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 tempfile = "3.24.0"

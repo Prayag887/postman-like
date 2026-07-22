@@ -188,6 +188,7 @@ mod tests {
             headers: vec![],
             content_type: Some("application/json".into()),
             body: body.into(),
+            body_hash: None,
             body_size: body.len() as u64,
             duration_ms: 10,
             truncated: false,

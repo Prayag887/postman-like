@@ -69,4 +69,5 @@ export interface Run {
   state: string;
   baseline_run_id?: string;
   executions: Execution[];
+  pinned: boolean;
 }

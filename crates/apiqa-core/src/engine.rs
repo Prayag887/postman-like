@@ -48,6 +48,7 @@ impl ApiQaEngine {
             state: RunState::Running,
             baseline_run_id: baseline.as_ref().map(|run| run.id.clone()),
             executions: Vec::new(),
+            pinned: false,
         };
         self.store.save_run(&run)?;
 
@@ -99,6 +100,8 @@ impl ApiQaEngine {
             RunState::Completed
         };
         self.store.save_run(&run)?;
+        let policy = self.store.retention_policy()?;
+        self.store.cleanup_history(&policy)?;
         Ok(run)
     }
 }
@@ -260,6 +263,7 @@ async fn send(
         headers,
         content_type,
         body,
+        body_hash: None,
         body_size,
         duration_ms: 0,
         truncated,
