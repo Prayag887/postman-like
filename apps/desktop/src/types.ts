@@ -24,6 +24,11 @@ export interface Collection {
   imported_at: string;
   import_warnings: string[];
 }
+export interface Environment {
+  id: string;
+  name: string;
+  variables: KeyValue[];
+}
 export interface Difference {
   kind: string;
   path: string;
@@ -52,6 +57,7 @@ export interface Execution {
   response?: ResponseSnapshot;
   error?: string;
   comparison?: ResponseComparison;
+  assertions: { name: string; passed: boolean; message: string }[];
 }
 export interface Run {
   id: string;

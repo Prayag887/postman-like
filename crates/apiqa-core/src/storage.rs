@@ -3,7 +3,7 @@ use std::{path::Path, sync::Mutex};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{Collection, Run};
+use crate::{Collection, Environment, Run};
 
 pub struct Store {
     connection: Mutex<Connection>,
@@ -30,7 +30,12 @@ impl Store {
                 FOREIGN KEY(collection_id) REFERENCES collections(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_runs_collection_started
-              ON runs(collection_id, started_at DESC);",
+              ON runs(collection_id, started_at DESC);
+            CREATE TABLE IF NOT EXISTS environments (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                data TEXT NOT NULL
+            );",
         )?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -66,6 +71,23 @@ impl Store {
             .optional()?;
         json.map(|value| serde_json::from_str(&value).context("decode collection"))
             .transpose()
+    }
+
+    pub fn save_environment(&self, environment: &Environment) -> Result<()> {
+        let json = serde_json::to_string(environment)?;
+        self.connection.lock().expect("store lock").execute(
+            "INSERT INTO environments(id,name,data) VALUES(?1,?2,?3)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name,data=excluded.data",
+            params![environment.id, environment.name, json],
+        )?;
+        Ok(())
+    }
+
+    pub fn environments(&self) -> Result<Vec<Environment>> {
+        let connection = self.connection.lock().expect("store lock");
+        let mut statement = connection.prepare("SELECT data FROM environments ORDER BY name")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
 
     pub fn save_run(&self, run: &Run) -> Result<()> {

@@ -32,7 +32,50 @@ pub struct ApiRequest {
     pub body_kind: BodyKind,
     pub body: Option<String>,
     #[serde(default)]
+    pub auth: Auth,
+    #[serde(default)]
+    pub assertions: Vec<ResponseAssertion>,
+    #[serde(default)]
     pub disabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Auth {
+    #[default]
+    None,
+    Basic {
+        username: String,
+        password: String,
+    },
+    Bearer {
+        token: String,
+    },
+    ApiKey {
+        key: String,
+        value: String,
+        location: ApiKeyLocation,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiKeyLocation {
+    Header,
+    Query,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResponseAssertion {
+    StatusEquals { expected: u16, name: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssertionResult {
+    pub name: String,
+    pub passed: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -68,6 +111,7 @@ pub struct ResponseSnapshot {
 pub enum ExecutionState {
     Passed,
     Changed,
+    AssertionFailed,
     TransportFailed,
     Skipped,
 }
@@ -83,6 +127,8 @@ pub struct RequestExecution {
     pub response: Option<ResponseSnapshot>,
     pub error: Option<String>,
     pub comparison: Option<ResponseComparison>,
+    #[serde(default)]
+    pub assertions: Vec<AssertionResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -143,6 +189,9 @@ pub struct RunOptions {
     pub timeout_ms: u64,
     #[serde(default)]
     pub stop_on_error: bool,
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub accept_invalid_certificates: bool,
 }
 
 fn default_timeout() -> u64 {
@@ -156,6 +205,8 @@ impl Default for RunOptions {
             baseline_run_id: None,
             timeout_ms: default_timeout(),
             stop_on_error: false,
+            proxy_url: None,
+            accept_invalid_certificates: false,
         }
     }
 }

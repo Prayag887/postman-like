@@ -739,6 +739,31 @@ main {
     10px ui-monospace,
     monospace;
 }
+.assertion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 14px;
+  padding: 10px;
+  border-radius: 6px;
+  background: #111c17;
+  color: var(--green);
+}
+.assertion.failed {
+  background: #2b1419;
+  color: var(--red);
+}
+.assertion div {
+  display: grid;
+  gap: 3px;
+}
+.assertion strong {
+  font-size: 10px;
+}
+.assertion small {
+  color: #8d8d96;
+  font-size: 9px;
+}
 @media (max-width: 1050px) {
   .split,
   .report-grid {

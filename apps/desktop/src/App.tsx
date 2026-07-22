@@ -16,11 +16,13 @@ import {
 } from "lucide-react";
 import {
   importCollection,
+  importEnvironment,
   listCollections,
+  listEnvironments,
   listRuns,
   runCollection,
 } from "./api";
-import type { Collection, Execution, Run } from "./types";
+import type { Collection, Environment, Execution, Run } from "./types";
 
 type View = "collections" | "history" | "regressions";
 
@@ -29,6 +31,8 @@ const methodClass = (method: string) => `method method-${method.toLowerCase()}`;
 export function App() {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [environments, setEnvironments] = useState<Environment[]>([]);
+  const [environmentId, setEnvironmentId] = useState<string>();
   const [selected, setSelected] = useState<string>();
   const [activeRun, setActiveRun] = useState<Run>();
   const [activeExecution, setActiveExecution] = useState<Execution>();
@@ -36,17 +40,20 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string>();
   const fileRef = useRef<HTMLInputElement>(null);
+  const environmentFileRef = useRef<HTMLInputElement>(null);
 
   const collection = collections.find((item) => item.id === selected);
   const collectionRuns = runs.filter((run) => run.collection_id === selected);
 
   async function refresh(preferred?: string) {
-    const [nextCollections, nextRuns] = await Promise.all([
+    const [nextCollections, nextRuns, nextEnvironments] = await Promise.all([
       listCollections(),
       listRuns(),
+      listEnvironments(),
     ]);
     setCollections(nextCollections);
     setRuns(nextRuns);
+    setEnvironments(nextEnvironments);
     setSelected(preferred ?? selected ?? nextCollections[0]?.id);
   }
 
@@ -72,7 +79,11 @@ export function App() {
     setError(undefined);
     setActiveExecution(undefined);
     try {
-      const run = await runCollection(collection.id, collectionRuns[0]?.id);
+      const run = await runCollection(
+        collection.id,
+        collectionRuns[0]?.id,
+        environmentId,
+      );
       setActiveRun(run);
       setRuns((current) => [
         run,
@@ -85,14 +96,29 @@ export function App() {
     }
   }
 
+  async function onEnvironmentImport(file?: File) {
+    if (!file) return;
+    try {
+      const environment = await importEnvironment(await file.text());
+      setEnvironments((current) => [
+        environment,
+        ...current.filter((item) => item.id !== environment.id),
+      ]);
+      setEnvironmentId(environment.id);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
   const summary = useMemo(() => {
     const executions = activeRun?.executions ?? [];
     return {
       total: executions.length,
       passed: executions.filter((item) => item.state === "passed").length,
       changed: executions.filter((item) => item.state === "changed").length,
-      failed: executions.filter((item) => item.state === "transport_failed")
-        .length,
+      failed: executions.filter((item) =>
+        ["transport_failed", "assertion_failed"].includes(item.state),
+      ).length,
     };
   }, [activeRun]);
 
@@ -176,9 +202,26 @@ export function App() {
             <button className="icon-button" aria-label="Search">
               <Search />
             </button>
-            <span className="environment">
-              <i /> No environment
-            </span>
+            <select
+              className="environment"
+              value={environmentId ?? ""}
+              onChange={(event) => {
+                if (event.target.value === "__import") {
+                  environmentFileRef.current?.click();
+                } else {
+                  setEnvironmentId(event.target.value || undefined);
+                }
+              }}
+              aria-label="Active environment"
+            >
+              <option value="">No environment</option>
+              {environments.map((environment) => (
+                <option key={environment.id} value={environment.id}>
+                  {environment.name}
+                </option>
+              ))}
+              <option value="__import">Import environment…</option>
+            </select>
           </div>
         </header>
 
@@ -224,6 +267,13 @@ export function App() {
         hidden
         accept="application/json,.json"
         onChange={(event) => onImport(event.target.files?.[0])}
+      />
+      <input
+        ref={environmentFileRef}
+        type="file"
+        hidden
+        accept="application/json,.json"
+        onChange={(event) => onEnvironmentImport(event.target.files?.[0])}
       />
     </div>
   );
@@ -475,6 +525,18 @@ function ExecutionDetail({ execution }: { execution: Execution }) {
         )}
       </div>
       {execution.error && <div className="error-copy">{execution.error}</div>}
+      {execution.assertions?.map((assertion) => (
+        <div
+          className={`assertion ${assertion.passed ? "passed" : "failed"}`}
+          key={assertion.name}
+        >
+          {assertion.passed ? <Check size={14} /> : <AlertTriangle size={14} />}
+          <div>
+            <strong>{assertion.name}</strong>
+            <small>{assertion.message}</small>
+          </div>
+        </div>
+      ))}
       {execution.comparison?.differences.map((difference, index) => (
         <div className="difference" key={`${difference.path}-${index}`}>
           <div>

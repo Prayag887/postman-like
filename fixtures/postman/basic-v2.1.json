@@ -1,5 +1,6 @@
 {
   "info": {
+    "_postman_id": "apiqa-demo-v21",
     "name": "APIQA Demo",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
@@ -11,9 +12,14 @@
       "name": "Health",
       "request": {
         "method": "GET",
+        "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }] },
         "header": [],
         "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
-      }
+      },
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": ["pm.test('Health is healthy', function () {", "  pm.response.to.have.status(200);", "});"] }
+      }]
     },
     {
       "name": "Users",

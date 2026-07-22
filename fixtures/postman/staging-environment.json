@@ -1,0 +1,9 @@
+{
+  "id": "apiqa-demo-staging",
+  "name": "Staging",
+  "values": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8787", "enabled": true, "type": "default" },
+    { "key": "token", "value": "replace-me", "enabled": true, "type": "secret" }
+  ],
+  "_postman_variable_scope": "environment"
+}

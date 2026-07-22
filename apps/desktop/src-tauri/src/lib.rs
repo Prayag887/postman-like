@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use apiqa_core::{ApiQaEngine, Collection, Run, RunOptions, Store, import_postman};
+use apiqa_core::{
+    ApiQaEngine, Collection, Environment, Run, RunOptions, Store, import_postman,
+    import_postman_environment,
+};
 use tauri::{Manager, State};
 
 struct AppState(Arc<ApiQaEngine>);
@@ -22,9 +25,26 @@ fn import_collection(source: String, state: State<'_, AppState>) -> Result<Colle
 }
 
 #[tauri::command]
+fn import_environment(source: String, state: State<'_, AppState>) -> Result<Environment, String> {
+    let environment = import_postman_environment(&source).map_err(display_error)?;
+    state
+        .0
+        .store
+        .save_environment(&environment)
+        .map_err(display_error)?;
+    Ok(environment)
+}
+
+#[tauri::command]
+fn list_environments(state: State<'_, AppState>) -> Result<Vec<Environment>, String> {
+    state.0.store.environments().map_err(display_error)
+}
+
+#[tauri::command]
 async fn run_collection(
     collection_id: String,
     baseline_run_id: Option<String>,
+    environment_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Run, String> {
     let collection = state
@@ -33,12 +53,23 @@ async fn run_collection(
         .collection(&collection_id)
         .map_err(display_error)?
         .ok_or_else(|| "Collection not found".to_string())?;
+    let environment = match environment_id {
+        Some(id) => state
+            .0
+            .store
+            .environments()
+            .map_err(display_error)?
+            .into_iter()
+            .find(|environment| environment.id == id),
+        None => None,
+    };
     state
         .0
         .run_collection(
             &collection,
             RunOptions {
                 baseline_run_id,
+                environment,
                 ..Default::default()
             },
         )
@@ -75,6 +106,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_collections,
             import_collection,
+            import_environment,
+            list_environments,
             run_collection,
             list_runs
         ])

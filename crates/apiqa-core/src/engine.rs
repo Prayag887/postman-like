@@ -10,8 +10,9 @@ use reqwest::{Client, Method};
 use uuid::Uuid;
 
 use crate::{
-    ApiRequest, BodyKind, Collection, ComparisonOptions, ExecutionState, KeyValue,
-    RequestExecution, ResponseSnapshot, Run, RunOptions, RunState, Store, compare_responses,
+    ApiKeyLocation, ApiRequest, AssertionResult, Auth, BodyKind, Collection, ComparisonOptions,
+    ExecutionState, KeyValue, RequestExecution, ResponseAssertion, ResponseSnapshot, Run,
+    RunOptions, RunState, Store, compare_responses,
 };
 
 pub struct ApiQaEngine {
@@ -50,9 +51,13 @@ impl ApiQaEngine {
         };
         self.store.save_run(&run)?;
 
-        let client = Client::builder()
+        let mut client_builder = Client::builder()
             .timeout(Duration::from_millis(options.timeout_ms))
-            .build()?;
+            .danger_accept_invalid_certs(options.accept_invalid_certificates);
+        if let Some(proxy_url) = options.proxy_url.as_deref() {
+            client_builder = client_builder.proxy(reqwest::Proxy::all(proxy_url)?);
+        }
+        let client = client_builder.build()?;
         let variables = resolve_variables(collection, options.environment.as_ref());
         for request in collection
             .requests
@@ -65,7 +70,10 @@ impl ApiQaEngine {
                     .find(|execution| execution.request_id == request.id)
             });
             let execution = execute(&client, &run.id, request, &variables, previous).await;
-            let failed = execution.state == ExecutionState::TransportFailed;
+            let failed = matches!(
+                execution.state,
+                ExecutionState::TransportFailed | ExecutionState::AssertionFailed
+            );
             run.executions.push(execution);
             self.store.save_run(&run)?;
             if failed && options.stop_on_error {
@@ -74,11 +82,12 @@ impl ApiQaEngine {
         }
 
         run.completed_at = Some(Utc::now());
-        run.state = if run
-            .executions
-            .iter()
-            .any(|execution| execution.state == ExecutionState::TransportFailed)
-        {
+        run.state = if run.executions.iter().any(|execution| {
+            matches!(
+                execution.state,
+                ExecutionState::TransportFailed | ExecutionState::AssertionFailed
+            )
+        }) {
             RunState::Failed
         } else if run
             .executions
@@ -107,6 +116,8 @@ async fn execute(
     match result {
         Ok(mut response) => {
             response.duration_ms = started.elapsed().as_millis() as u64;
+            let assertions = evaluate_assertions(request, &response);
+            let assertion_failed = assertions.iter().any(|result| !result.passed);
             let comparison = baseline
                 .and_then(|execution| execution.response.as_ref())
                 .map(|previous| {
@@ -120,7 +131,9 @@ async fn execute(
                 run_id: run_id.to_string(),
                 request_id: request.id.clone(),
                 request_name: request.name.clone(),
-                state: if changed {
+                state: if assertion_failed {
+                    ExecutionState::AssertionFailed
+                } else if changed {
                     ExecutionState::Changed
                 } else {
                     ExecutionState::Passed
@@ -129,6 +142,7 @@ async fn execute(
                 response: Some(response),
                 error: None,
                 comparison,
+                assertions,
             }
         }
         Err(error) => RequestExecution {
@@ -141,6 +155,7 @@ async fn execute(
             response: None,
             error: Some(format!("{error:#}")),
             comparison: None,
+            assertions: vec![],
         },
     }
 }
@@ -162,11 +177,55 @@ async fn send(
     for query in request.query.iter().filter(|query| query.enabled) {
         builder = builder.query(&[(query.key.as_str(), substitute(&query.value, variables))]);
     }
-    if request.body_kind == BodyKind::Raw {
-        builder = builder.body(substitute(
-            request.body.as_deref().unwrap_or_default(),
-            variables,
-        ));
+    match &request.auth {
+        Auth::None => {}
+        Auth::Basic { username, password } => {
+            builder = builder.basic_auth(
+                substitute(username, variables),
+                Some(substitute(password, variables)),
+            );
+        }
+        Auth::Bearer { token } => {
+            builder = builder.bearer_auth(substitute(token, variables));
+        }
+        Auth::ApiKey {
+            key,
+            value,
+            location,
+        } => match location {
+            ApiKeyLocation::Header => builder = builder.header(key, substitute(value, variables)),
+            ApiKeyLocation::Query => {
+                builder = builder.query(&[(key, substitute(value, variables))])
+            }
+        },
+    }
+    match request.body_kind {
+        BodyKind::Raw => {
+            builder = builder.body(substitute(
+                request.body.as_deref().unwrap_or_default(),
+                variables,
+            ))
+        }
+        BodyKind::UrlEncoded => {
+            let values: Vec<KeyValue> =
+                serde_json::from_str(request.body.as_deref().unwrap_or("[]"))?;
+            let form = values
+                .into_iter()
+                .filter(|value| value.enabled)
+                .map(|value| (value.key, substitute(&value.value, variables)))
+                .collect::<Vec<_>>();
+            builder = builder.form(&form);
+        }
+        BodyKind::FormData => {
+            let values: Vec<KeyValue> =
+                serde_json::from_str(request.body.as_deref().unwrap_or("[]"))?;
+            let mut form = reqwest::multipart::Form::new();
+            for value in values.into_iter().filter(|value| value.enabled) {
+                form = form.text(value.key, substitute(&value.value, variables));
+            }
+            builder = builder.multipart(form);
+        }
+        BodyKind::None => {}
     }
     let response = builder.send().await?;
     let status = response.status().as_u16();
@@ -207,6 +266,24 @@ async fn send(
     })
 }
 
+fn evaluate_assertions(request: &ApiRequest, response: &ResponseSnapshot) -> Vec<AssertionResult> {
+    request
+        .assertions
+        .iter()
+        .map(|assertion| match assertion {
+            ResponseAssertion::StatusEquals { expected, name } => AssertionResult {
+                name: name.clone(),
+                passed: response.status == *expected,
+                message: if response.status == *expected {
+                    format!("Status was {expected}")
+                } else {
+                    format!("Expected status {expected}, received {}", response.status)
+                },
+            },
+        })
+        .collect()
+}
+
 fn resolve_variables(
     collection: &Collection,
     environment: Option<&crate::Environment>,
@@ -238,7 +315,7 @@ mod tests {
     use chrono::Utc;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
+        matchers::{header, method, path},
     };
 
     #[tokio::test]
@@ -246,6 +323,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/health"))
+            .and(header("authorization", "Bearer secret"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true})))
             .mount(&server)
             .await;
@@ -268,15 +346,37 @@ mod tests {
                 query: vec![],
                 body_kind: BodyKind::None,
                 body: None,
+                auth: Auth::Bearer {
+                    token: "{{token}}".into(),
+                },
+                assertions: vec![ResponseAssertion::StatusEquals {
+                    expected: 200,
+                    name: "healthy".into(),
+                }],
                 disabled: false,
             }],
         };
         engine.store.save_collection(&collection).unwrap();
         let run = engine
-            .run_collection(&collection, RunOptions::default())
+            .run_collection(
+                &collection,
+                RunOptions {
+                    environment: Some(crate::Environment {
+                        id: "e1".into(),
+                        name: "Test".into(),
+                        variables: vec![KeyValue {
+                            key: "token".into(),
+                            value: "secret".into(),
+                            enabled: true,
+                        }],
+                    }),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(run.state, RunState::Completed);
         assert_eq!(run.executions[0].response.as_ref().unwrap().status, 200);
+        assert!(run.executions[0].assertions[0].passed);
     }
 }

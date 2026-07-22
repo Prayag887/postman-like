@@ -2,6 +2,23 @@
 
 All notable changes to APIQA are documented here.
 
+## [0.2.0] - 2026-07-22
+
+### Added
+
+- Stable Postman collection and request identities for safe re-import updates.
+- Postman environment import and active-environment selection.
+- Basic, Bearer, and API-key authentication with variable substitution.
+- URL-encoded and multipart text request bodies.
+- Engine-level HTTP/HTTPS proxy and invalid-certificate controls.
+- Safe translation and evaluation of common `pm.response.to.have.status(...)` tests.
+- Assertion failures as first-class run outcomes.
+
+### Changed
+
+- Unsupported Postman scripts produce request-specific migration warnings.
+- Imported collection IDs now prefer Postman's stable `_postman_id`.
+
 ## [0.1.0] - 2026-07-22
 
 ### Added
