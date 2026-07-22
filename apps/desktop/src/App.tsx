@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { layout, prepare } from "@chenglou/pretext";
 import {
   Activity,
   AlertTriangle,
   Check,
+  ChevronDown,
   ChevronRight,
-  Clock3,
+  Copy,
   Database,
   FileDiff,
   FolderOpen,
@@ -14,7 +16,9 @@ import {
   Play,
   Plus,
   Search,
+  Save,
   Settings,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -73,6 +77,16 @@ export function App() {
     setEnvironments(nextEnvironments);
     setSelected(preferred ?? selected ?? nextCollections[0]?.id);
   }
+
+  useEffect(() => {
+    if (!collection) {
+      setEditingRequest(undefined);
+      return;
+    }
+    if (editingRequest?.collection_id !== collection.id) {
+      setEditingRequest(collection.requests[0]);
+    }
+  }, [collection?.id]);
 
   useEffect(() => {
     refresh().catch((reason) => setError(String(reason)));
@@ -159,7 +173,23 @@ export function App() {
     setCollections((current) =>
       current.map((item) => (item.id === next.id ? next : item)),
     );
-    setEditingRequest(undefined);
+    setEditingRequest(request);
+  }
+
+  async function deleteRequest(request: ApiRequest) {
+    if (!collection) return;
+    const index = collection.requests.findIndex(
+      (item) => item.id === request.id,
+    );
+    const next = {
+      ...collection,
+      requests: collection.requests.filter((item) => item.id !== request.id),
+    };
+    await saveCollection(next);
+    setCollections((current) =>
+      current.map((item) => (item.id === next.id ? next : item)),
+    );
+    setEditingRequest(next.requests[index] ?? next.requests[index - 1]);
   }
 
   const summary = useMemo(() => {
@@ -211,19 +241,47 @@ export function App() {
         <div className="sidebar-section-label">COLLECTIONS</div>
         <div className="collection-list">
           {collections.map((item) => (
-            <button
-              key={item.id}
-              className={`collection-item ${selected === item.id ? "active" : ""}`}
-              onClick={() => {
-                setSelected(item.id);
-                setActiveRun(undefined);
-                setActiveExecution(undefined);
-              }}
-            >
-              <span className="collection-dot" />
-              <span>{item.name}</span>
-              <small>{item.requests.length}</small>
-            </button>
+            <div className="collection-tree" key={item.id}>
+              <button
+                className={`collection-item ${selected === item.id ? "active" : ""}`}
+                onClick={() => {
+                  setSelected(item.id);
+                  setEditingRequest(item.requests[0]);
+                  setActiveRun(undefined);
+                  setActiveExecution(undefined);
+                }}
+              >
+                {selected === item.id ? <ChevronDown /> : <ChevronRight />}
+                <FolderOpen />
+                <span>{item.name}</span>
+                <small>{item.requests.length}</small>
+              </button>
+              {selected === item.id && view === "collections" && (
+                <div className="request-tree">
+                  {item.requests.map((request) => (
+                    <button
+                      key={request.id}
+                      className={
+                        editingRequest?.id === request.id ? "active" : ""
+                      }
+                      title={`${request.method} ${request.url}`}
+                      onClick={() => {
+                        setEditingRequest(request);
+                        setActiveRun(undefined);
+                      }}
+                    >
+                      <span className={methodClass(request.method)}>
+                        {request.method}
+                      </span>
+                      <span>{request.name}</span>
+                    </button>
+                  ))}
+                  <button className="tree-new" onClick={newRequest}>
+                    <Plus /> <span>Add request</span>
+                  </button>
+                </div>
+              )}
+            </div>
           ))}
         </div>
         <button
@@ -301,7 +359,15 @@ export function App() {
             activeExecution={activeExecution}
             onExecution={setActiveExecution}
             onNewRequest={newRequest}
-            onEditRequest={setEditingRequest}
+            request={editingRequest}
+            onSaveRequest={(request) =>
+              persistRequest(request).catch((reason) =>
+                setError(String(reason)),
+              )
+            }
+            onDeleteRequest={(request) =>
+              deleteRequest(request).catch((reason) => setError(String(reason)))
+            }
           />
         ) : (
           <RunsView
@@ -332,15 +398,6 @@ export function App() {
         accept="application/json,.json"
         onChange={(event) => onEnvironmentImport(event.target.files?.[0])}
       />
-      {editingRequest && (
-        <RequestEditor
-          initial={editingRequest}
-          onClose={() => setEditingRequest(undefined)}
-          onSave={(request) =>
-            persistRequest(request).catch((reason) => setError(String(reason)))
-          }
-        />
-      )}
       {settingsOpen && (
         <SettingsDialog
           onClose={() => setSettingsOpen(false)}
@@ -411,7 +468,9 @@ function CollectionView({
   activeExecution,
   onExecution,
   onNewRequest,
-  onEditRequest,
+  request,
+  onSaveRequest,
+  onDeleteRequest,
 }: {
   collection?: Collection;
   runs: Run[];
@@ -423,100 +482,560 @@ function CollectionView({
   activeExecution?: Execution;
   onExecution: (execution: Execution) => void;
   onNewRequest: () => void;
-  onEditRequest: (request: ApiRequest) => void;
+  request?: ApiRequest;
+  onSaveRequest: (request: ApiRequest) => void;
+  onDeleteRequest: (request: ApiRequest) => void;
 }) {
   if (!collection) return null;
-  return (
-    <div className="workspace">
-      <section className="collection-head">
-        <div>
-          <p className="eyebrow">COLLECTION</p>
-          <h1>{collection.name}</h1>
-          <p>
-            {collection.requests.length} endpoints · {runs.length} historical
-            runs
-          </p>
-        </div>
-        <div className="head-actions">
-          <button className="secondary" onClick={onNewRequest}>
-            <Plus size={17} /> New request
-          </button>
-          <button className="primary" disabled={running} onClick={onRun}>
-            <Play size={17} fill="currentColor" />
-            {running ? "Running…" : "Run collection"}
-          </button>
-        </div>
-      </section>
-      {collection.import_warnings.length > 0 && (
-        <div className="warning">
-          <AlertTriangle size={17} />
-          <span>
-            {collection.import_warnings.length} import warning
-            {collection.import_warnings.length === 1 ? "" : "s"}. Scripts are
-            preserved as warnings in this version.
-          </span>
-        </div>
-      )}
-      {activeRun ? (
+  if (activeRun) {
+    return (
+      <div className="workspace">
         <RunReport
           run={activeRun}
           summary={summary}
           active={activeExecution}
           onExecution={onExecution}
         />
-      ) : (
-        <div className="split">
-          <section className="panel">
-            <div className="panel-title">
-              <h2>Endpoints</h2>
-              <span>{collection.requests.length}</span>
+      </div>
+    );
+  }
+  return (
+    <RequestWorkspace
+      collection={collection}
+      request={request}
+      running={running}
+      runs={runs}
+      onRun={onRun}
+      onOpenRun={onOpenRun}
+      onNewRequest={onNewRequest}
+      onSave={onSaveRequest}
+      onDelete={onDeleteRequest}
+    />
+  );
+}
+
+type RequestTab = "params" | "authorization" | "headers" | "body";
+
+function RequestWorkspace({
+  collection,
+  request,
+  running,
+  runs,
+  onRun,
+  onOpenRun,
+  onNewRequest,
+  onSave,
+  onDelete,
+}: {
+  collection: Collection;
+  request?: ApiRequest;
+  running: boolean;
+  runs: Run[];
+  onRun: () => void;
+  onOpenRun: (run: Run) => void;
+  onNewRequest: () => void;
+  onSave: (request: ApiRequest) => void;
+  onDelete: (request: ApiRequest) => void;
+}) {
+  const [draft, setDraft] = useState(request);
+  const [tab, setTab] = useState<RequestTab>("params");
+  const [copied, setCopied] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => {
+    setDraft(request);
+    setConfirmDelete(false);
+  }, [request?.id]);
+  const curl = useMemo(() => (draft ? requestToCurl(draft) : ""), [draft]);
+  const dirty =
+    !!draft && !!request && JSON.stringify(draft) !== JSON.stringify(request);
+
+  if (!draft) {
+    return (
+      <section className="request-empty">
+        <FolderOpen />
+        <h1>{collection.name}</h1>
+        <p>This collection has no requests yet.</p>
+        <button className="primary" onClick={onNewRequest}>
+          <Plus /> Create request
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <div className="request-workspace">
+      <section className="request-main">
+        <div className="request-tabbar">
+          <div className="request-tab active">
+            <span className={methodClass(draft.method)}>{draft.method}</span>
+            <input
+              aria-label="Request name"
+              value={draft.name}
+              onChange={(event) =>
+                setDraft({ ...draft, name: event.target.value })
+              }
+            />
+            {dirty && <i title="Unsaved changes" />}
+          </div>
+          <button
+            className="tab-add"
+            onClick={onNewRequest}
+            aria-label="New request"
+          >
+            <Plus />
+          </button>
+          <div className="request-tab-actions">
+            <button
+              className="secondary compact"
+              onClick={() => onOpenRun(runs[0])}
+              disabled={!runs.length}
+            >
+              History
+            </button>
+            <button
+              className="primary compact"
+              disabled={running}
+              onClick={onRun}
+            >
+              <Play fill="currentColor" />{" "}
+              {running ? "Running…" : "Run collection"}
+            </button>
+          </div>
+        </div>
+
+        <form
+          className="request-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSave(draft);
+          }}
+        >
+          <div className="request-urlbar">
+            <select
+              value={draft.method}
+              onChange={(event) =>
+                setDraft({ ...draft, method: event.target.value })
+              }
+              aria-label="HTTP method"
+            >
+              {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map(
+                (method) => (
+                  <option key={method}>{method}</option>
+                ),
+              )}
+            </select>
+            <input
+              value={draft.url}
+              onChange={(event) =>
+                setDraft({ ...draft, url: event.target.value })
+              }
+              aria-label="Request URL"
+              spellCheck={false}
+            />
+            <button className="primary send" type="submit">
+              <Save /> Save
+            </button>
+            <button
+              className="danger-icon"
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+              aria-label="Delete request"
+              title="Delete request"
+            >
+              <Trash2 />
+            </button>
+          </div>
+
+          {collection.import_warnings.length > 0 && (
+            <div
+              className="inline-warning"
+              title={collection.import_warnings.join("\n")}
+            >
+              <AlertTriangle /> {collection.import_warnings.length} import
+              warning{collection.import_warnings.length === 1 ? "" : "s"}
             </div>
-            {collection.requests.map((request) => (
+          )}
+
+          <div className="editor-tabs" role="tablist">
+            {(
+              ["params", "authorization", "headers", "body"] as RequestTab[]
+            ).map((item) => (
               <button
-                className="request-row"
-                key={request.id}
-                onClick={() => onEditRequest(request)}
+                type="button"
+                role="tab"
+                aria-selected={tab === item}
+                className={tab === item ? "active" : ""}
+                key={item}
+                onClick={() => setTab(item)}
               >
-                <span className={methodClass(request.method)}>
-                  {request.method}
-                </span>
-                <div>
-                  <strong>{request.name}</strong>
-                  <small>{request.url}</small>
-                </div>
-                <ChevronRight />
+                {item[0].toUpperCase() + item.slice(1)}
+                {item === "params" && enabledCount(draft.query) > 0 && (
+                  <b>{enabledCount(draft.query)}</b>
+                )}
+                {item === "headers" && enabledCount(draft.headers) > 0 && (
+                  <b>{enabledCount(draft.headers)}</b>
+                )}
               </button>
             ))}
-          </section>
-          <section className="panel">
-            <div className="panel-title">
-              <h2>Recent runs</h2>
-              <button>View all</button>
-            </div>
-            {runs.length ? (
-              runs
-                .slice(0, 6)
-                .map((run) => (
-                  <RunRow
-                    key={run.id}
-                    run={run}
-                    onClick={() => onOpenRun(run)}
+          </div>
+
+          <div className="editor-content">
+            {tab === "params" && (
+              <KeyValueEditor
+                title="Query Params"
+                rows={draft.query}
+                onChange={(query) => setDraft({ ...draft, query })}
+              />
+            )}
+            {tab === "headers" && (
+              <KeyValueEditor
+                title="Headers"
+                rows={draft.headers}
+                onChange={(headers) => setDraft({ ...draft, headers })}
+              />
+            )}
+            {tab === "authorization" && (
+              <AuthorizationEditor request={draft} onChange={setDraft} />
+            )}
+            {tab === "body" && (
+              <div className="body-editor">
+                <div className="editor-section-head">
+                  <strong>Request body</strong>
+                  <select
+                    value={draft.body_kind}
+                    onChange={(event) =>
+                      setDraft({ ...draft, body_kind: event.target.value })
+                    }
+                  >
+                    <option value="none">none</option>
+                    <option value="raw">raw / JSON</option>
+                    <option value="url_encoded">x-www-form-urlencoded</option>
+                    <option value="form_data">form-data</option>
+                  </select>
+                </div>
+                {draft.body_kind === "none" ? (
+                  <div className="editor-placeholder">
+                    This request does not have a body.
+                  </div>
+                ) : (
+                  <textarea
+                    value={draft.body ?? ""}
+                    onChange={(event) =>
+                      setDraft({ ...draft, body: event.target.value })
+                    }
+                    placeholder={'{\n  "key": "value"\n}'}
+                    spellCheck={false}
                   />
-                ))
-            ) : (
-              <div className="mini-empty">
-                <Clock3 />
-                <strong>No history yet</strong>
-                <p>
-                  Your first run becomes the baseline for future comparisons.
-                </p>
+                )}
               </div>
             )}
+          </div>
+        </form>
+
+        <div className="response-placeholder">
+          <div>
+            <strong>Response</strong>
+            <span>Run the collection to capture and compare responses.</span>
+          </div>
+          {runs[0] && (
+            <button onClick={() => onOpenRun(runs[0])}>
+              Open latest run <ChevronRight />
+            </button>
+          )}
+        </div>
+      </section>
+
+      <aside className="code-sidebar">
+        <div className="code-head">
+          <div>
+            <span>Code snippet</span>
+            <strong>cURL</strong>
+          </div>
+          <button
+            onClick={async () => {
+              await navigator.clipboard.writeText(curl);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1500);
+            }}
+          >
+            {copied ? <Check /> : <Copy />} {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+        <PretextCode>{curl}</PretextCode>
+        <div className="code-note">
+          <strong>Ready for your terminal</strong>
+          <p>
+            Variables stay in Postman format so you can see exactly what will be
+            substituted at run time.
+          </p>
+        </div>
+      </aside>
+
+      {confirmDelete && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={() => setConfirmDelete(false)}
+        >
+          <section
+            className="dialog delete-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="delete-mark">
+              <Trash2 />
+            </div>
+            <h2>Delete “{draft.name}”?</h2>
+            <p>
+              The endpoint will be removed from this collection. Existing run
+              history remains available until its retention date.
+            </p>
+            <div className="dialog-actions">
+              <button
+                className="secondary"
+                onClick={() => setConfirmDelete(false)}
+              >
+                Cancel
+              </button>
+              <button className="danger" onClick={() => onDelete(draft)}>
+                <Trash2 /> Delete request
+              </button>
+            </div>
           </section>
         </div>
       )}
     </div>
   );
+}
+
+function KeyValueEditor({
+  title,
+  rows,
+  onChange,
+}: {
+  title: string;
+  rows: ApiRequest["headers"];
+  onChange: (rows: ApiRequest["headers"]) => void;
+}) {
+  const visible = [...rows, { key: "", value: "", enabled: true }];
+  function update(index: number, patch: Partial<(typeof visible)[number]>) {
+    const next = [...visible];
+    next[index] = { ...next[index], ...patch };
+    onChange(next.filter((row) => row.key || row.value));
+  }
+  return (
+    <div className="kv-editor">
+      <div className="editor-section-head">
+        <strong>{title}</strong>
+        <span>{rows.length} configured</span>
+      </div>
+      <div className="kv-head">
+        <span />
+        <span>Key</span>
+        <span>Value</span>
+        <span />
+      </div>
+      {visible.map((row, index) => (
+        <div className="kv-row" key={`${index}-${rows.length}`}>
+          <input
+            type="checkbox"
+            checked={row.enabled}
+            onChange={(event) =>
+              update(index, { enabled: event.target.checked })
+            }
+            aria-label="Enable row"
+          />
+          <input
+            value={row.key}
+            onChange={(event) => update(index, { key: event.target.value })}
+            placeholder="Key"
+          />
+          <input
+            value={row.value}
+            onChange={(event) => update(index, { value: event.target.value })}
+            placeholder="Value"
+          />
+          <button
+            type="button"
+            onClick={() =>
+              onChange(rows.filter((_, rowIndex) => rowIndex !== index))
+            }
+            disabled={index === rows.length}
+            aria-label="Remove row"
+          >
+            <X />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AuthorizationEditor({
+  request,
+  onChange,
+}: {
+  request: ApiRequest;
+  onChange: (request: ApiRequest) => void;
+}) {
+  const auth = request.auth;
+  const type = auth.type;
+  const setAuth = (patch: Record<string, unknown>) =>
+    onChange({ ...request, auth: { ...auth, ...patch } });
+  return (
+    <div className="auth-editor">
+      <div className="auth-type">
+        <label>Auth type</label>
+        <select
+          value={type}
+          onChange={(event) =>
+            onChange({ ...request, auth: { type: event.target.value } })
+          }
+        >
+          <option value="none">No Auth</option>
+          <option value="bearer">Bearer Token</option>
+          <option value="basic">Basic Auth</option>
+          <option value="api_key">API Key</option>
+        </select>
+      </div>
+      <div className="auth-fields">
+        {type === "none" && (
+          <div className="editor-placeholder">
+            This request does not use authorization.
+          </div>
+        )}
+        {type === "bearer" && (
+          <label>
+            Token
+            <input
+              value={String(auth.token ?? "")}
+              onChange={(event) => setAuth({ token: event.target.value })}
+              placeholder="Token"
+            />
+          </label>
+        )}
+        {type === "basic" && (
+          <>
+            <label>
+              Username
+              <input
+                value={String(auth.username ?? "")}
+                onChange={(event) => setAuth({ username: event.target.value })}
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                value={String(auth.password ?? "")}
+                onChange={(event) => setAuth({ password: event.target.value })}
+              />
+            </label>
+          </>
+        )}
+        {type === "api_key" && (
+          <>
+            <label>
+              Key
+              <input
+                value={String(auth.key ?? "")}
+                onChange={(event) => setAuth({ key: event.target.value })}
+              />
+            </label>
+            <label>
+              Value
+              <input
+                value={String(auth.value ?? "")}
+                onChange={(event) => setAuth({ value: event.target.value })}
+              />
+            </label>
+            <label>
+              Add to
+              <select
+                value={String(auth.location ?? "header")}
+                onChange={(event) => setAuth({ location: event.target.value })}
+              >
+                <option value="header">Header</option>
+                <option value="query">Query</option>
+              </select>
+            </label>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PretextCode({ children }: { children: string }) {
+  const ref = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    let prepared = prepare(children, "10px ui-monospace");
+    const relayout = () => {
+      const result = layout(
+        prepared,
+        Math.max(100, element.clientWidth - 34),
+        17.5,
+      );
+      element.style.minHeight = `${Math.max(260, result.height + 34)}px`;
+    };
+    prepared = prepare(children, getComputedStyle(element).font);
+    const observer = new ResizeObserver(relayout);
+    observer.observe(element);
+    relayout();
+    return () => observer.disconnect();
+  }, [children]);
+  return <pre ref={ref}>{children}</pre>;
+}
+
+function enabledCount(rows: ApiRequest["headers"]) {
+  return rows.filter((row) => row.enabled).length;
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function requestToCurl(request: ApiRequest) {
+  const query = request.query
+    .filter((row) => row.enabled && row.key)
+    .map(
+      (row) =>
+        `${encodeURIComponent(row.key)}=${encodeURIComponent(row.value)}`,
+    )
+    .join("&");
+  const url =
+    request.url +
+    (query ? `${request.url.includes("?") ? "&" : "?"}${query}` : "");
+  const lines = [
+    `curl --request ${request.method} \\`,
+    `  --url ${shellQuote(url)}`,
+  ];
+  for (const header of request.headers.filter(
+    (row) => row.enabled && row.key,
+  )) {
+    lines[lines.length - 1] += " \\";
+    lines.push(`  --header ${shellQuote(`${header.key}: ${header.value}`)}`);
+  }
+  if (request.auth.type === "bearer" && request.auth.token) {
+    lines[lines.length - 1] += " \\";
+    lines.push(
+      `  --header ${shellQuote(`Authorization: Bearer ${String(request.auth.token)}`)}`,
+    );
+  }
+  if (request.auth.type === "basic") {
+    lines[lines.length - 1] += " \\";
+    lines.push(
+      `  --user ${shellQuote(`${String(request.auth.username ?? "")}:${String(request.auth.password ?? "")}`)}`,
+    );
+  }
+  if (request.body_kind !== "none" && request.body) {
+    lines[lines.length - 1] += " \\";
+    lines.push(`  --data-raw ${shellQuote(request.body)}`);
+  }
+  return lines.join("\n");
 }
 
 function RunReport({
@@ -708,124 +1227,6 @@ function RunsView({
           </div>
         )}
       </section>
-    </div>
-  );
-}
-
-function RequestEditor({
-  initial,
-  onClose,
-  onSave,
-}: {
-  initial: ApiRequest;
-  onClose: () => void;
-  onSave: (request: ApiRequest) => void;
-}) {
-  const [request, setRequest] = useState(initial);
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <form
-        className="dialog request-editor"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="request-editor-title"
-        onMouseDown={(event) => event.stopPropagation()}
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSave(request);
-        }}
-      >
-        <div className="dialog-title">
-          <div>
-            <p className="eyebrow">REQUEST</p>
-            <h2 id="request-editor-title">Edit endpoint</h2>
-          </div>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <X />
-          </button>
-        </div>
-        <label>
-          Name
-          <input
-            autoFocus
-            required
-            value={request.name}
-            onChange={(event) =>
-              setRequest({ ...request, name: event.target.value })
-            }
-          />
-        </label>
-        <div className="request-target">
-          <label>
-            Method
-            <select
-              value={request.method}
-              onChange={(event) =>
-                setRequest({ ...request, method: event.target.value })
-              }
-            >
-              {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map(
-                (method) => (
-                  <option key={method}>{method}</option>
-                ),
-              )}
-            </select>
-          </label>
-          <label>
-            URL
-            <input
-              required
-              type="url"
-              value={request.url}
-              onChange={(event) =>
-                setRequest({ ...request, url: event.target.value })
-              }
-            />
-          </label>
-        </div>
-        <label>
-          Body type
-          <select
-            value={request.body_kind}
-            onChange={(event) =>
-              setRequest({ ...request, body_kind: event.target.value })
-            }
-          >
-            <option value="none">No body</option>
-            <option value="raw">Raw / JSON</option>
-            <option value="urlencoded">URL encoded</option>
-          </select>
-        </label>
-        {request.body_kind !== "none" && (
-          <label>
-            Request body
-            <textarea
-              rows={10}
-              placeholder={'{\n  "key": "value"\n}'}
-              value={request.body ?? ""}
-              onChange={(event) =>
-                setRequest({ ...request, body: event.target.value })
-              }
-            />
-          </label>
-        )}
-        <p className="dialog-note">
-          Use <code>{"{{variable}}"}</code> in URLs, headers, and bodies.
-          Imported authentication, assertions, and response extractions remain
-          attached.
-        </p>
-        <div className="dialog-actions">
-          <button type="button" className="secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="primary">Save request</button>
-        </div>
-      </form>
     </div>
   );
 }

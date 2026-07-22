@@ -2,6 +2,19 @@
 
 All notable changes to APIQA are documented here.
 
+## [1.1.0] - 2026-07-22
+
+### Added
+
+- Postman-style three-pane request workspace with collections and endpoints on the left, a persistent request editor in the center, and live copyable cURL on the right.
+- Inline editing for HTTP method, URL, query parameters, headers, authorization, and request bodies.
+- Confirmed endpoint deletion that preserves existing response history until normal retention cleanup.
+
+### Changed
+
+- Imported endpoints now open directly from the collection tree instead of in a modal editor.
+- Request cURL snippets reflow with the available panel width for consistent layouts across desktop platforms.
+
 ## [1.0.4] - 2026-07-22
 
 ### Fixed

@@ -10,6 +10,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@chenglou/pretext':
+        specifier: ^0.0.8
+        version: 0.0.8
       '@tauri-apps/api':
         specifier: 2.11.1
         version: 2.11.1
@@ -46,6 +49,9 @@ importers:
         version: 8.1.5
 
 packages:
+
+  '@chenglou/pretext@0.0.8':
+    resolution: {integrity: sha512-yqm2GMxnPI7VHcHwe84P8ZF0JK/2d2DMKPqMN+s95jQhwDMYYXKVFVJUMEaVWckQStdsjdLav/0Vu+d9YbtGxA==}
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -464,6 +470,8 @@ packages:
         optional: true
 
 snapshots:
+
+  '@chenglou/pretext@0.0.8': {}
 
   '@emnapi/core@1.11.1':
     dependencies:
