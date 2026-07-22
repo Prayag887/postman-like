@@ -35,6 +35,20 @@ export async function runCollection(
   });
 }
 
+export async function runRequest(
+  collectionId: string,
+  requestId: string,
+  baselineRunId?: string,
+  environmentId?: string,
+): Promise<Run> {
+  return invoke("run_request", {
+    collectionId,
+    requestId,
+    baselineRunId,
+    environmentId,
+  });
+}
+
 export async function listRuns(collectionId?: string): Promise<Run[]> {
   if (!inTauri()) return [];
   return invoke("list_runs", { collectionId });
@@ -67,4 +81,16 @@ export async function saveRetentionPolicy(
 
 export async function cleanupHistory(): Promise<CleanupResult> {
   return invoke("cleanup_history");
+}
+
+export async function exportWorkspace(): Promise<string> {
+  return invoke("export_workspace_bundle");
+}
+
+export async function exportWorkspaceFile(): Promise<string> {
+  return invoke("export_workspace_file");
+}
+
+export async function importWorkspace(source: string): Promise<Collection[]> {
+  return invoke("import_workspace_bundle", { source });
 }

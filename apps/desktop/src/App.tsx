@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Copy,
   Database,
+  Download,
   FileDiff,
   FolderOpen,
   History,
@@ -18,18 +19,23 @@ import {
   Search,
   Save,
   Settings,
+  Share2,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import {
+  exportWorkspaceFile,
   importCollection,
   importEnvironment,
+  importWorkspace,
   listCollections,
   listEnvironments,
   listRuns,
   cleanupHistory,
   retentionPolicy,
   runCollection,
+  runRequest,
   saveCollection,
   saveRetentionPolicy,
   setRunPinned,
@@ -60,8 +66,10 @@ export function App() {
   const [error, setError] = useState<string>();
   const [editingRequest, setEditingRequest] = useState<ApiRequest>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const environmentFileRef = useRef<HTMLInputElement>(null);
+  const workspaceFileRef = useRef<HTMLInputElement>(null);
 
   const collection = collections.find((item) => item.id === selected);
   const collectionRuns = runs.filter((run) => run.collection_id === selected);
@@ -127,6 +135,24 @@ export function App() {
     }
   }
 
+  async function onSendRequest(
+    requestId: string,
+  ): Promise<Execution | undefined> {
+    if (!collection) return undefined;
+    setError(undefined);
+    const run = await runRequest(
+      collection.id,
+      requestId,
+      collectionRuns[0]?.id,
+      environmentId,
+    );
+    setRuns((current) => [
+      run,
+      ...current.filter((item) => item.id !== run.id),
+    ]);
+    return run.executions[0];
+  }
+
   async function onEnvironmentImport(file?: File) {
     if (!file) return;
     try {
@@ -138,6 +164,28 @@ export function App() {
       setEnvironmentId(environment.id);
     } catch (reason) {
       setError(String(reason));
+    }
+  }
+
+  async function onWorkspaceImport(file?: File) {
+    if (!file) return;
+    setError(undefined);
+    try {
+      const imported = await importWorkspace(await file.text());
+      await refresh(imported[0]?.id);
+      setView("collections");
+      setShareOpen(false);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function onWorkspaceExport(): Promise<string | undefined> {
+    try {
+      return await exportWorkspaceFile();
+    } catch (reason) {
+      setError(String(reason));
+      return undefined;
     }
   }
 
@@ -212,7 +260,7 @@ export function App() {
             <Activity size={18} />
           </div>
           <span>APIQA</span>
-          <em>1.0</em>
+          <em>1.2</em>
         </div>
         <nav>
           <Nav
@@ -258,24 +306,14 @@ export function App() {
               </button>
               {selected === item.id && view === "collections" && (
                 <div className="request-tree">
-                  {item.requests.map((request) => (
-                    <button
-                      key={request.id}
-                      className={
-                        editingRequest?.id === request.id ? "active" : ""
-                      }
-                      title={`${request.method} ${request.url}`}
-                      onClick={() => {
-                        setEditingRequest(request);
-                        setActiveRun(undefined);
-                      }}
-                    >
-                      <span className={methodClass(request.method)}>
-                        {request.method}
-                      </span>
-                      <span>{request.name}</span>
-                    </button>
-                  ))}
+                  <CollectionRequestTree
+                    requests={item.requests}
+                    activeId={editingRequest?.id}
+                    onSelect={(request) => {
+                      setEditingRequest(request);
+                      setActiveRun(undefined);
+                    }}
+                  />
                   <button className="tree-new" onClick={newRequest}>
                     <Plus /> <span>Add request</span>
                   </button>
@@ -335,6 +373,9 @@ export function App() {
               ))}
               <option value="__import">Import environment…</option>
             </select>
+            <button className="share-button" onClick={() => setShareOpen(true)}>
+              <Share2 /> Share workspace
+            </button>
           </div>
         </header>
 
@@ -355,6 +396,12 @@ export function App() {
             running={running}
             summary={summary}
             onRun={onRun}
+            onSendRequest={(requestId) =>
+              onSendRequest(requestId).catch((reason) => {
+                setError(String(reason));
+                return undefined;
+              })
+            }
             onOpenRun={setActiveRun}
             activeExecution={activeExecution}
             onExecution={setActiveExecution}
@@ -398,11 +445,27 @@ export function App() {
         accept="application/json,.json"
         onChange={(event) => onEnvironmentImport(event.target.files?.[0])}
       />
+      <input
+        ref={workspaceFileRef}
+        type="file"
+        hidden
+        accept=".apiqa-workspace,application/json"
+        onChange={(event) => onWorkspaceImport(event.target.files?.[0])}
+      />
       {settingsOpen && (
         <SettingsDialog
           onClose={() => setSettingsOpen(false)}
           onError={(reason) => setError(String(reason))}
           onCleaned={() => refresh()}
+        />
+      )}
+      {shareOpen && (
+        <ShareWorkspaceDialog
+          collectionCount={collections.length}
+          environmentCount={environments.length}
+          onClose={() => setShareOpen(false)}
+          onExport={onWorkspaceExport}
+          onImport={() => workspaceFileRef.current?.click()}
         />
       )}
     </div>
@@ -427,6 +490,137 @@ function Nav({
       {icon}
       <span>{label}</span>
       {!!badge && <b>{badge}</b>}
+    </button>
+  );
+}
+
+interface RequestFolderNode {
+  name: string;
+  folders: RequestFolderNode[];
+  requests: ApiRequest[];
+}
+
+function buildRequestTree(requests: ApiRequest[]): RequestFolderNode {
+  const root: RequestFolderNode = { name: "", folders: [], requests: [] };
+  for (const request of requests) {
+    let node = root;
+    for (const folderName of request.folder_path) {
+      let folder = node.folders.find((item) => item.name === folderName);
+      if (!folder) {
+        folder = { name: folderName, folders: [], requests: [] };
+        node.folders.push(folder);
+      }
+      node = folder;
+    }
+    node.requests.push(request);
+  }
+  return root;
+}
+
+function CollectionRequestTree({
+  requests,
+  activeId,
+  onSelect,
+}: {
+  requests: ApiRequest[];
+  activeId?: string;
+  onSelect: (request: ApiRequest) => void;
+}) {
+  const root = useMemo(() => buildRequestTree(requests), [requests]);
+  return (
+    <>
+      {root.folders.map((folder) => (
+        <RequestFolder
+          key={folder.name}
+          folder={folder}
+          activeId={activeId}
+          onSelect={onSelect}
+        />
+      ))}
+      {root.requests.map((request) => (
+        <RequestTreeItem
+          key={request.id}
+          request={request}
+          active={activeId === request.id}
+          onSelect={onSelect}
+        />
+      ))}
+    </>
+  );
+}
+
+function RequestFolder({
+  folder,
+  activeId,
+  onSelect,
+}: {
+  folder: RequestFolderNode;
+  activeId?: string;
+  onSelect: (request: ApiRequest) => void;
+}) {
+  const containsActive =
+    folder.requests.some((item) => item.id === activeId) ||
+    folder.folders.some((item) => folderContains(item, activeId));
+  const [expanded, setExpanded] = useState(true);
+  useEffect(() => {
+    if (containsActive) setExpanded(true);
+  }, [containsActive]);
+  return (
+    <div className="request-folder">
+      <button className="folder-row" onClick={() => setExpanded(!expanded)}>
+        {expanded ? <ChevronDown /> : <ChevronRight />}
+        <FolderOpen />
+        <span>{folder.name}</span>
+      </button>
+      {expanded && (
+        <div className="folder-children">
+          {folder.folders.map((child) => (
+            <RequestFolder
+              key={child.name}
+              folder={child}
+              activeId={activeId}
+              onSelect={onSelect}
+            />
+          ))}
+          {folder.requests.map((request) => (
+            <RequestTreeItem
+              key={request.id}
+              request={request}
+              active={activeId === request.id}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function folderContains(folder: RequestFolderNode, activeId?: string): boolean {
+  return (
+    folder.requests.some((item) => item.id === activeId) ||
+    folder.folders.some((item) => folderContains(item, activeId))
+  );
+}
+
+function RequestTreeItem({
+  request,
+  active,
+  onSelect,
+}: {
+  request: ApiRequest;
+  active: boolean;
+  onSelect: (request: ApiRequest) => void;
+}) {
+  return (
+    <button
+      className={active ? "active" : ""}
+      title={`${request.method} ${request.url}`}
+      onClick={() => onSelect(request)}
+    >
+      <ChevronRight className="request-chevron" />
+      <span className={methodClass(request.method)}>{request.method}</span>
+      <span>{request.name}</span>
     </button>
   );
 }
@@ -464,6 +658,7 @@ function CollectionView({
   running,
   summary,
   onRun,
+  onSendRequest,
   onOpenRun,
   activeExecution,
   onExecution,
@@ -478,12 +673,13 @@ function CollectionView({
   running: boolean;
   summary: { total: number; passed: number; changed: number; failed: number };
   onRun: () => void;
+  onSendRequest: (requestId: string) => Promise<Execution | undefined>;
   onOpenRun: (run: Run) => void;
   activeExecution?: Execution;
   onExecution: (execution: Execution) => void;
   onNewRequest: () => void;
   request?: ApiRequest;
-  onSaveRequest: (request: ApiRequest) => void;
+  onSaveRequest: (request: ApiRequest) => Promise<void>;
   onDeleteRequest: (request: ApiRequest) => void;
 }) {
   if (!collection) return null;
@@ -506,6 +702,7 @@ function CollectionView({
       running={running}
       runs={runs}
       onRun={onRun}
+      onSend={onSendRequest}
       onOpenRun={onOpenRun}
       onNewRequest={onNewRequest}
       onSave={onSaveRequest}
@@ -514,7 +711,14 @@ function CollectionView({
   );
 }
 
-type RequestTab = "params" | "authorization" | "headers" | "body";
+type RequestTab =
+  | "docs"
+  | "params"
+  | "authorization"
+  | "headers"
+  | "body"
+  | "tests"
+  | "settings";
 
 function RequestWorkspace({
   collection,
@@ -522,6 +726,7 @@ function RequestWorkspace({
   running,
   runs,
   onRun,
+  onSend,
   onOpenRun,
   onNewRequest,
   onSave,
@@ -532,18 +737,22 @@ function RequestWorkspace({
   running: boolean;
   runs: Run[];
   onRun: () => void;
+  onSend: (requestId: string) => Promise<Execution | undefined>;
   onOpenRun: (run: Run) => void;
   onNewRequest: () => void;
-  onSave: (request: ApiRequest) => void;
+  onSave: (request: ApiRequest) => Promise<void>;
   onDelete: (request: ApiRequest) => void;
 }) {
   const [draft, setDraft] = useState(request);
   const [tab, setTab] = useState<RequestTab>("params");
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [response, setResponse] = useState<Execution>();
   useEffect(() => {
     setDraft(request);
     setConfirmDelete(false);
+    setResponse(undefined);
   }, [request?.id]);
   const curl = useMemo(() => (draft ? requestToCurl(draft) : ""), [draft]);
   const dirty =
@@ -603,11 +812,45 @@ function RequestWorkspace({
           </div>
         </div>
 
+        <div className="request-context">
+          <div className="request-breadcrumb">
+            <span>{collection.name}</span>
+            {draft.folder_path.map((folder) => (
+              <span key={folder}>
+                <ChevronRight /> {folder}
+              </span>
+            ))}
+            <strong>
+              <ChevronRight /> {draft.name}
+            </strong>
+          </div>
+          <button
+            className="context-save"
+            disabled={!dirty}
+            onClick={() => onSave(draft)}
+          >
+            <Save /> Save
+          </button>
+          <button
+            className="context-delete"
+            onClick={() => setConfirmDelete(true)}
+            title="Delete request"
+          >
+            <Trash2 />
+          </button>
+        </div>
+
         <form
           className="request-form"
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            onSave(draft);
+            setSending(true);
+            try {
+              if (dirty) await onSave(draft);
+              setResponse(await onSend(draft.id));
+            } finally {
+              setSending(false);
+            }
           }}
         >
           <div className="request-urlbar">
@@ -632,17 +875,8 @@ function RequestWorkspace({
               aria-label="Request URL"
               spellCheck={false}
             />
-            <button className="primary send" type="submit">
-              <Save /> Save
-            </button>
-            <button
-              className="danger-icon"
-              type="button"
-              onClick={() => setConfirmDelete(true)}
-              aria-label="Delete request"
-              title="Delete request"
-            >
-              <Trash2 />
+            <button className="primary send" type="submit" disabled={sending}>
+              <Play /> {sending ? "Sending…" : "Send"}
             </button>
           </div>
 
@@ -658,7 +892,15 @@ function RequestWorkspace({
 
           <div className="editor-tabs" role="tablist">
             {(
-              ["params", "authorization", "headers", "body"] as RequestTab[]
+              [
+                "docs",
+                "params",
+                "authorization",
+                "headers",
+                "body",
+                "tests",
+                "settings",
+              ] as RequestTab[]
             ).map((item) => (
               <button
                 type="button"
@@ -680,6 +922,21 @@ function RequestWorkspace({
           </div>
 
           <div className="editor-content">
+            {tab === "docs" && (
+              <div className="docs-editor">
+                <div className="editor-section-head">
+                  <strong>Request documentation</strong>
+                </div>
+                <h3>{draft.name}</h3>
+                <code>
+                  {draft.method} {draft.url}
+                </code>
+                <p>
+                  This request was imported from {collection.name}. Variables
+                  use the <code>{"{{variable}}"}</code> format.
+                </p>
+              </div>
+            )}
             {tab === "params" && (
               <KeyValueEditor
                 title="Query Params"
@@ -729,18 +986,80 @@ function RequestWorkspace({
                 )}
               </div>
             )}
+            {tab === "tests" && (
+              <div className="tests-editor">
+                <div className="editor-section-head">
+                  <strong>Response tests</strong>
+                  <span>{draft.assertions.length} configured</span>
+                </div>
+                {draft.assertions.length ? (
+                  <pre>{JSON.stringify(draft.assertions, null, 2)}</pre>
+                ) : (
+                  <div className="editor-placeholder">
+                    No response assertions are configured.
+                  </div>
+                )}
+              </div>
+            )}
+            {tab === "settings" && (
+              <div className="request-settings">
+                <div className="editor-section-head">
+                  <strong>Request settings</strong>
+                </div>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={!draft.disabled}
+                    onChange={(event) =>
+                      setDraft({ ...draft, disabled: !event.target.checked })
+                    }
+                  />{" "}
+                  Include this request in collection runs
+                </label>
+                <p>
+                  Disabled requests stay in the collection but are skipped by
+                  automation.
+                </p>
+              </div>
+            )}
           </div>
         </form>
 
-        <div className="response-placeholder">
-          <div>
-            <strong>Response</strong>
-            <span>Run the collection to capture and compare responses.</span>
-          </div>
-          {runs[0] && (
-            <button onClick={() => onOpenRun(runs[0])}>
-              Open latest run <ChevronRight />
-            </button>
+        <div
+          className={`response-placeholder ${response ? "has-response" : ""}`}
+        >
+          {response ? (
+            <div className="inline-response">
+              <div className="inline-response-head">
+                <strong>Response</strong>
+                {response.response && (
+                  <>
+                    <span className="status-code">
+                      {response.response.status}
+                    </span>
+                    <span>{response.response.duration_ms} ms</span>
+                    <span>{formatBytes(response.response.body_size)}</span>
+                  </>
+                )}
+              </div>
+              {response.error ? (
+                <div className="error-copy">{response.error}</div>
+              ) : (
+                <pre>{prettyBody(response.response?.body ?? "")}</pre>
+              )}
+            </div>
+          ) : (
+            <>
+              <div>
+                <strong>Response</strong>
+                <span>Send this request to inspect the latest response.</span>
+              </div>
+              {runs[0] && (
+                <button onClick={() => onOpenRun(runs[0])}>
+                  Open latest run <ChevronRight />
+                </button>
+              )}
+            </>
           )}
         </div>
       </section>
@@ -1226,6 +1545,81 @@ function RunsView({
             <p>Run a collection to build response history.</p>
           </div>
         )}
+      </section>
+    </div>
+  );
+}
+
+function ShareWorkspaceDialog({
+  collectionCount,
+  environmentCount,
+  onClose,
+  onExport,
+  onImport,
+}: {
+  collectionCount: number;
+  environmentCount: number;
+  onClose: () => void;
+  onExport: () => Promise<string | undefined>;
+  onImport: () => void;
+}) {
+  const [savedPath, setSavedPath] = useState<string>();
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="dialog share-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-workspace-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-title">
+          <div>
+            <p className="eyebrow">PORTABLE WORKSPACE</p>
+            <h2 id="share-workspace-title">Share your APIQA workspace</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="Close">
+            <X />
+          </button>
+        </div>
+        <p className="share-summary">
+          Package {collectionCount} collection{collectionCount === 1 ? "" : "s"}{" "}
+          and {environmentCount} environment{environmentCount === 1 ? "" : "s"}{" "}
+          into one file that another APIQA user can open.
+        </p>
+        <div className="share-safety">
+          <Check /> Token, secret, password, and API-key environment values are
+          removed automatically. Request definitions and non-secret variables
+          are included.
+        </div>
+        <button
+          className="share-option primary"
+          onClick={async () => setSavedPath(await onExport())}
+        >
+          <Download />
+          <span>
+            <strong>Export workspace</strong>
+            <small>Create a shareable .apiqa-workspace file</small>
+          </span>
+          <ChevronRight />
+        </button>
+        {savedPath && (
+          <div className="workspace-saved">
+            <Check />
+            <span>
+              <strong>Workspace exported</strong>
+              <small>{savedPath}</small>
+            </span>
+          </div>
+        )}
+        <button className="share-option secondary" onClick={onImport}>
+          <Upload />
+          <span>
+            <strong>Open shared workspace</strong>
+            <small>Import collections and environments from a teammate</small>
+          </span>
+          <ChevronRight />
+        </button>
       </section>
     </div>
   );

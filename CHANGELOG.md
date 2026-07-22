@@ -2,6 +2,21 @@
 
 All notable changes to APIQA are documented here.
 
+## [1.2.0] - 2026-07-22
+
+### Added
+
+- Portable workspace export and import for sharing all collections and environments in a single `.apiqa-workspace` file.
+- Automatic removal of token, secret, password, and API-key environment values from shared workspaces.
+- Single-request Send execution with an inline response viewer.
+- Recursive Postman folder navigation and request breadcrumbs.
+- Request documentation, tests, and settings tabs alongside parameters, authorization, headers, and bodies.
+
+### Changed
+
+- Refined the desktop workspace to closely match Postman's dense three-pane layout.
+- Moved request Save and Delete controls into the request breadcrumb toolbar.
+
 ## [1.1.0] - 2026-07-22
 
 ### Added

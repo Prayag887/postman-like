@@ -6,7 +6,10 @@ mod model;
 mod report;
 mod storage;
 
-pub use bundle::{ProjectBundle, export_project, import_project};
+pub use bundle::{
+    ProjectBundle, WorkspaceBundle, export_project, export_workspace, import_project,
+    import_workspace,
+};
 pub use compare::{ComparisonOptions, compare_responses};
 pub use engine::ApiQaEngine;
 pub use import::{import_postman, import_postman_environment};

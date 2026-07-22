@@ -233,6 +233,25 @@ main {
   align-items: center;
   gap: 14px;
 }
+.share-button {
+  height: 31px;
+  padding: 0 10px;
+  border: 1px solid #4a4a51;
+  border-radius: 5px;
+  background: #1b1b1f;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #d8d8dd;
+  font-size: 10px;
+}
+.share-button:hover {
+  background: #25252a;
+  border-color: #62626b;
+}
+.share-button svg {
+  width: 13px;
+}
 .icon-button {
   border: 0;
   background: none;
@@ -954,6 +973,29 @@ main {
   padding-left: 10px;
   border-left: 1px solid #29292e;
 }
+.request-folder .folder-row {
+  color: #b1b1b8;
+  font-weight: 550;
+}
+.request-folder .folder-row > svg:first-child,
+.request-folder .request-chevron {
+  width: 10px;
+  flex: 0 0 10px;
+  color: #676770;
+}
+.request-folder .folder-row > svg:nth-child(2) {
+  width: 14px;
+  flex: 0 0 14px;
+  color: #909099;
+}
+.folder-children {
+  margin-left: 9px;
+  padding-left: 8px;
+  border-left: 1px solid #2b2b30;
+}
+.request-tree > button > .request-chevron {
+  width: 10px;
+}
 .request-tree button {
   width: 100%;
   min-height: 31px;
@@ -1024,12 +1066,74 @@ main {
   background: #0d0d0f;
 }
 .request-tabbar {
-  height: 48px;
-  flex: 0 0 48px;
+  height: 43px;
+  flex: 0 0 43px;
   display: flex;
   align-items: stretch;
   border-bottom: 1px solid var(--line);
   background: #101013;
+}
+.request-context {
+  min-height: 48px;
+  padding: 0 12px 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  background: #111114;
+}
+.request-breadcrumb {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #74747d;
+  font-size: 10px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.request-breadcrumb span,
+.request-breadcrumb strong {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.request-breadcrumb strong {
+  color: #d8d8dc;
+}
+.request-breadcrumb svg {
+  width: 10px;
+}
+.context-save,
+.context-delete {
+  height: 30px;
+  border: 1px solid #37373d;
+  border-radius: 5px;
+  background: #19191d;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #b7b7bf;
+  font-size: 10px;
+}
+.context-save {
+  margin-left: auto;
+  padding: 0 10px;
+}
+.context-save:disabled {
+  opacity: 0.4;
+}
+.context-delete {
+  width: 31px;
+  justify-content: center;
+}
+.context-delete:hover {
+  color: var(--red);
+  background: #271419;
+}
+.context-save svg,
+.context-delete svg {
+  width: 12px;
 }
 .request-tab {
   width: min(360px, 42vw);
@@ -1097,7 +1201,7 @@ main {
 .request-urlbar {
   height: 42px;
   display: grid;
-  grid-template-columns: 100px minmax(160px, 1fr) auto 40px;
+  grid-template-columns: 100px minmax(160px, 1fr) 120px;
   border: 1px solid #36363d;
   border-radius: 6px;
   overflow: hidden;
@@ -1155,9 +1259,51 @@ main {
 .editor-tabs {
   display: flex;
   align-items: end;
-  gap: 24px;
+  gap: 18px;
   height: 52px;
   border-bottom: 1px solid var(--line);
+}
+.docs-editor,
+.tests-editor,
+.request-settings {
+  color: #9a9aa3;
+  font-size: 10px;
+}
+.docs-editor h3 {
+  margin: 13px 0 8px;
+  color: #e0e0e4;
+  font-size: 15px;
+}
+.docs-editor > code {
+  color: #d9ae63;
+  font-size: 10px;
+}
+.docs-editor p,
+.request-settings p {
+  line-height: 1.6;
+}
+.docs-editor p code {
+  color: #ef9c65;
+}
+.tests-editor pre {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #2a2a2f;
+  border-radius: 4px;
+  background: #0b0b0d;
+  color: #bcc8d7;
+  font:
+    10px/1.6 ui-monospace,
+    monospace;
+}
+.request-settings label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #d0d0d5;
+}
+.request-settings input {
+  accent-color: var(--orange);
 }
 .editor-tabs button {
   height: 100%;
@@ -1317,6 +1463,46 @@ main {
   align-items: center;
   background: #0b0b0d;
 }
+.response-placeholder.has-response {
+  height: min(38vh, 330px);
+  padding: 0;
+  align-items: stretch;
+  overflow: hidden;
+}
+.inline-response {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.inline-response-head {
+  min-height: 43px;
+  padding: 0 17px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.inline-response-head strong {
+  margin-right: auto;
+}
+.inline-response-head > span:not(.status-code) {
+  color: #777780;
+  font-size: 9px;
+}
+.inline-response > pre {
+  margin: 0;
+  padding: 14px 17px;
+  min-height: 0;
+  overflow: auto;
+  color: #b9c6d5;
+  font:
+    10px/1.65 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  white-space: pre-wrap;
+}
 .response-placeholder > div {
   display: grid;
   gap: 5px;
@@ -1411,6 +1597,88 @@ main {
 .delete-dialog {
   width: min(430px, 100%);
   text-align: center;
+}
+.share-dialog {
+  width: min(520px, 100%);
+}
+.share-summary {
+  margin: -4px 0 14px;
+  color: #9a9aa3;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.share-safety {
+  margin-bottom: 14px;
+  padding: 10px;
+  border: 1px solid #27523f;
+  border-radius: 6px;
+  background: #10231a;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #91d7ba;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.share-safety svg {
+  width: 14px;
+  flex: 0 0 14px;
+  margin-top: 2px;
+}
+.share-option {
+  width: 100%;
+  min-height: 61px;
+  margin-top: 9px;
+  text-align: left;
+}
+.share-option > svg:first-child {
+  width: 18px;
+}
+.share-option > svg:last-child {
+  width: 13px;
+  margin-left: auto;
+}
+.share-option span {
+  display: grid;
+  gap: 3px;
+}
+.share-option strong {
+  font-size: 11px;
+}
+.share-option small {
+  color: inherit;
+  opacity: 0.7;
+  font-size: 9px;
+  font-weight: 400;
+}
+.workspace-saved {
+  margin-top: 9px;
+  padding: 9px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 6px;
+  background: #111c17;
+  color: var(--green);
+}
+.workspace-saved > svg {
+  width: 14px;
+  flex: 0 0 14px;
+}
+.workspace-saved span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.workspace-saved strong {
+  font-size: 10px;
+}
+.workspace-saved small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #7f9d90;
+  font-size: 8px;
+  white-space: nowrap;
 }
 .delete-mark {
   width: 42px;
