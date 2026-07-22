@@ -2,6 +2,12 @@
 
 All notable changes to APIQA are documented here.
 
+## [1.0.3] - 2026-07-22
+
+### Fixed
+
+- Linux release packaging now targets the native Debian installer directly, bypassing an AppImage helper crash on GitHub's Ubuntu runner.
+
 ## [1.0.2] - 2026-07-22
 
 ### Fixed

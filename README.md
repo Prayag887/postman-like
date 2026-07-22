@@ -18,7 +18,7 @@ Download the installer for your platform from [GitHub Releases](https://github.c
 
 - macOS Apple Silicon or Intel: `.dmg`
 - Windows: `.msi` or setup `.exe`
-- Linux: `.AppImage` or `.deb`
+- Linux (Debian, Ubuntu, and derivatives): `.deb`
 
 On first launch, import a Postman collection, choose an optional environment, and select **Run collection**. The first run is your baseline; later runs show exactly which endpoints changed. Use Settings to select the history window.
 
@@ -58,4 +58,4 @@ Run exit codes are `0` for unchanged, `2` for response changes, `3` for assertio
 
 ## Release builds
 
-Push a version tag such as `v1.0.2`. GitHub Actions builds and publishes native artifacts for macOS (Apple Silicon and Intel), Windows, and Linux. The default workflow creates unsigned community builds. Before commercial distribution, add a separate signed release job using the Apple notarization and Windows code-signing credentials described by Tauri's platform guides.
+Push a version tag such as `v1.0.3`. GitHub Actions builds and publishes native artifacts for macOS (Apple Silicon and Intel), Windows, and Linux. The default workflow creates unsigned community builds. Before commercial distribution, add a separate signed release job using the Apple notarization and Windows code-signing credentials described by Tauri's platform guides.

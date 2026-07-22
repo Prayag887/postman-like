@@ -26,7 +26,7 @@ jobs:
             args: ""
           - name: Linux
             platform: ubuntu-22.04
-            args: ""
+            args: --bundles deb
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
