@@ -23,7 +23,7 @@ jobs:
             args: --target x86_64-apple-darwin
           - name: Windows
             platform: windows-latest
-            args: ""
+            args: --bundles nsis
           - name: Linux
             platform: ubuntu-22.04
             args: --bundles deb

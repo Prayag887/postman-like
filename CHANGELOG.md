@@ -2,6 +2,12 @@
 
 All notable changes to APIQA are documented here.
 
+## [1.0.4] - 2026-07-22
+
+### Fixed
+
+- Windows release packaging now targets the NSIS setup executable directly, avoiding a post-package failure from optional bundle formats.
+
 ## [1.0.3] - 2026-07-22
 
 ### Fixed
