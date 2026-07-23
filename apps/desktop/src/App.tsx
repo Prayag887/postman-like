@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Cable,
   CircleHelp,
+  Moon,
   MonitorSmartphone,
   RefreshCw,
   Smartphone,
+  Sun,
   Wifi,
 } from "lucide-react";
 import { discoverDevices } from "./api";
@@ -23,11 +25,33 @@ export function platformLabel(device: AndroidDevice): string {
   }`;
 }
 
+type Theme = "light" | "dark";
+
+export function resolveInitialTheme(
+  storedTheme: string | null,
+  prefersDark: boolean,
+): Theme {
+  if (storedTheme === "light" || storedTheme === "dark") return storedTheme;
+  return prefersDark ? "dark" : "light";
+}
+
 export function App() {
   const [devices, setDevices] = useState<AndroidDevice[]>([]);
   const [selected, setSelected] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
+  const [theme, setTheme] = useState<Theme>(() =>
+    resolveInitialTheme(
+      localStorage.getItem("app-tester-theme"),
+      window.matchMedia("(prefers-color-scheme: dark)").matches,
+    ),
+  );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    localStorage.setItem("app-tester-theme", theme);
+  }, [theme]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -64,6 +88,20 @@ export function App() {
             <strong>App Tester</strong>
             <small>Autonomous Android QA</small>
           </div>
+          <button
+            className="theme-toggle"
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            onClick={() =>
+              setTheme((current) => (current === "dark" ? "light" : "dark"))
+            }
+          >
+            {theme === "dark" ? (
+              <Sun aria-hidden="true" />
+            ) : (
+              <Moon aria-hidden="true" />
+            )}
+          </button>
         </div>
         <nav aria-label="Workflow">
           <button className="active">

@@ -29,6 +29,19 @@ aside {
 .brand strong, .brand small { display: block; }
 .brand strong { font-size: 15px; }
 .brand small { color: var(--muted); margin-top: 3px; font-size: 11px; }
+.theme-toggle {
+  margin-left: auto;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: inherit;
+  background: transparent;
+}
+.theme-toggle:hover { background: var(--panel-strong); }
+.theme-toggle svg { width: 20px; }
 nav { display: grid; gap: 8px; margin-top: 52px; }
 nav button {
   height: 44px; border: 0; border-radius: 9px; background: transparent; color: #71827e;
