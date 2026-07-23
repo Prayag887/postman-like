@@ -28,6 +28,7 @@
     "resources": {
       "../../../scripts/autonomous_scan.py": "scripts/autonomous_scan.py",
       "../../../scripts/local_model_scan.py": "scripts/local_model_scan.py",
+      "../../../scripts/runtime_diagnostics.py": "scripts/runtime_diagnostics.py",
       "../../../scripts/requirements-local-model.txt": "scripts/requirements-local-model.txt"
     },
     "category": "DeveloperTool",

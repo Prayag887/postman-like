@@ -16,13 +16,14 @@ from typing import Any
 
 from local_model_scan import (
     Action,
-    adb,
     capture,
     choose_action,
     discover_actions,
     fingerprint,
     load_model,
+    understand_screen,
 )
+from runtime_diagnostics import LogcatCollector
 
 
 @dataclass
@@ -34,6 +35,11 @@ class StateRecord:
     screenshot: str
     actions_found: int
     scrollables: int
+    screen_name: str
+    purpose: str
+    flow_stage: str
+    semantic_confidence: int
+    semantic_evidence: list[str]
 
 
 @dataclass
@@ -138,6 +144,12 @@ def action_key(action: Action | dict[str, Any]) -> tuple[str, str, str]:
         str(value.get("label", "")).casefold(),
         str(value.get("bounds", "")),
     )
+
+
+def is_immediate_loop(
+    path: list[dict[str, Any]], action: Action | dict[str, Any]
+) -> bool:
+    return bool(path and action_key(path[-1])[:2] == action_key(action)[:2])
 
 
 def best_match(actions: list[Action], selector: dict[str, Any]) -> Action | None:
@@ -335,9 +347,28 @@ def deduplicate_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for issue in issues:
         key = (issue["category"], issue["title"], issue["state_id"])
         if key not in grouped:
-            grouped[key] = {**issue, "occurrences": 1}
+            grouped[key] = {
+                **issue,
+                "occurrences": 1,
+                "occurrence_details": [
+                    {
+                        "occurred_at": issue.get("occurred_at"),
+                        "screen_name": issue.get("screen_name"),
+                        "how_it_occurred": issue.get("how_it_occurred"),
+                        "evidence": issue.get("evidence"),
+                    }
+                ],
+            }
         else:
             grouped[key]["occurrences"] += 1
+            grouped[key]["occurrence_details"].append(
+                {
+                    "occurred_at": issue.get("occurred_at"),
+                    "screen_name": issue.get("screen_name"),
+                    "how_it_occurred": issue.get("how_it_occurred"),
+                    "evidence": issue.get("evidence"),
+                }
+            )
     ordered = list(grouped.values())
     severity = {"blocker": 0, "major": 1, "minor": 2, "warning": 3}
     ordered.sort(key=lambda item: severity.get(item["severity"], 9))
@@ -375,7 +406,8 @@ def write_outputs(
             handle.write(json.dumps(decision) + "\n")
     mermaid = ["flowchart TD"]
     for state in states.values():
-        mermaid.append(f'  S{state.ordinal}["State {state.ordinal}"]')
+        name = state.screen_name.replace('"', "'")
+        mermaid.append(f'  S{state.ordinal}["{state.ordinal}: {name}"]')
     for transition in transitions:
         source = states[transition["source"]].ordinal
         destination = states[transition["destination"]].ordinal
@@ -402,9 +434,28 @@ def write_outputs(
         f"- Remaining frontier: {frontier_remaining}",
         f"- Issues: {len(issue_list)}",
         "",
-        "## Ordered issues",
+        "## Screen catalog",
         "",
     ]
+    for state in states.values():
+        report.extend(
+            [
+                f"### {state.ordinal}: {state.screen_name}",
+                "",
+                f"- Purpose: {state.purpose}",
+                f"- Flow stage: `{state.flow_stage}`",
+                f"- Semantic confidence: {state.semantic_confidence}%",
+                f"- Evidence anchors: {', '.join(state.semantic_evidence) or 'None'}",
+                f"- State: `{state.id}`",
+                "",
+            ]
+        )
+    report.extend(
+        [
+        "## Ordered issues",
+        "",
+        ]
+    )
     if not issue_list:
         report.append("No high-confidence deterministic issues were detected.")
     for issue in issue_list:
@@ -417,6 +468,16 @@ def write_outputs(
                 f"**Category:** {issue['category'].title()}",
                 f"**State:** `{issue['state_id']}`",
                 f"**Occurrences:** {issue['occurrences']}",
+                *(
+                    [f"**Screen:** {issue['screen_name']}"]
+                    if issue.get("screen_name")
+                    else []
+                ),
+                *(
+                    [f"**Occurred:** {issue['occurred_at']}"]
+                    if issue.get("occurred_at")
+                    else []
+                ),
                 "",
                 "### Evidence",
                 "",
@@ -474,6 +535,9 @@ def main() -> int:
     hierarchy, screenshot = capture(args.serial, output, 0, args.adb)
     root_id = fingerprint(hierarchy)
     root_actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
+    root_semantics = understand_screen(
+        tokenizer, model, device, hierarchy, root_actions
+    )
     states: dict[str, StateRecord] = {
         root_id: StateRecord(
             id=root_id,
@@ -483,6 +547,11 @@ def main() -> int:
             screenshot=str(screenshot.relative_to(output)),
             actions_found=len(root_actions),
             scrollables=sum(a.class_name == "__scroll__" for a in root_actions),
+            screen_name=str(root_semantics["screen_name"]),
+            purpose=str(root_semantics["purpose"]),
+            flow_stage=str(root_semantics["flow_stage"]),
+            semantic_confidence=int(root_semantics["confidence"]),
+            semantic_evidence=list(root_semantics["evidence_anchors"]),
         )
     }
     issues = state_issues(root_id, hierarchy, root_actions, str(screenshot.relative_to(output)))
@@ -490,7 +559,9 @@ def main() -> int:
     queued: set[tuple[str, tuple[str, str, str]]] = set()
     model_decisions: list[dict[str, Any]] = []
 
-    def enqueue(state: StateRecord, actions: list[Action]) -> None:
+    def enqueue(
+        state: StateRecord, actions: list[Action], *, prioritize: bool = False
+    ) -> None:
         executed: set[tuple[str, str]] = set()
         preferred, decision = choose_action(tokenizer, model, device, actions, executed)
         model_decisions.append(
@@ -503,25 +574,36 @@ def main() -> int:
         ordered = ([preferred] if preferred else []) + [
             action for action in actions if preferred is None or action_key(action) != action_key(preferred)
         ]
+        eligible: list[FrontierItem] = []
         for action in ordered:
             if action.risk != "safe" or RISKY_WORDS.search(action.label):
+                continue
+            if is_immediate_loop(state.path, action):
                 continue
             key = (state.id, action_key(action))
             if key in queued:
                 continue
             queued.add(key)
-            frontier.append(
+            eligible.append(
                 FrontierItem(
                     source_id=state.id,
                     path=state.path,
                     action=asdict(action),
                 )
             )
+        if prioritize:
+            for entry in reversed(eligible):
+                frontier.appendleft(entry)
+        else:
+            frontier.extend(eligible)
 
     enqueue(states[root_id], root_actions)
     transitions: list[dict[str, Any]] = []
+    collector = LogcatCollector(args.serial, args.adb, args.package)
     deadline = time.monotonic() + args.max_minutes * 60
     capture_ordinal = 1
+    current_state_id = root_id
+    current_hierarchy = hierarchy
 
     while (
         frontier
@@ -530,20 +612,33 @@ def main() -> int:
         and time.monotonic() < deadline
     ):
         item = frontier.popleft()
-        restored, source_hierarchy = restore_path(
-            args.serial, args.package, args.adb, item.path
-        )
-        if not restored:
-            transitions.append(
-                {
-                    "source": item.source_id,
-                    "destination": item.source_id,
-                    "action": item.action,
-                    "result": "replay_failed",
-                    "latency_ms": 0,
-                }
+        reused_session = current_state_id == item.source_id
+        source_hierarchy = current_hierarchy
+        if not reused_session:
+            restored, source_hierarchy = restore_path(
+                args.serial, args.package, args.adb, item.path
             )
-            continue
+            if not restored:
+                transitions.append(
+                    {
+                        "source": item.source_id,
+                        "destination": item.source_id,
+                        "action": item.action,
+                        "result": "replay_failed",
+                        "latency_ms": 0,
+                        "navigation_mode": "replay",
+                    }
+                )
+                current_state_id = ""
+                continue
+            current_state_id = item.source_id
+            current_hierarchy = source_hierarchy
+        collector.collect(
+            state_id=item.source_id,
+            screen_name=states[item.source_id].screen_name,
+            action=None,
+            path=item.path,
+        )
         current_actions = with_scroll_actions(
             discover_actions(source_hierarchy), source_hierarchy
         )
@@ -554,6 +649,15 @@ def main() -> int:
         perform_action(args.serial, args.adb, action)
         destination_hierarchy = wait_for_stability(args.serial, args.adb)
         latency_ms = round((time.monotonic() - started) * 1000)
+        raw_logs, runtime_issues = collector.collect(
+            state_id=item.source_id,
+            screen_name=states[item.source_id].screen_name,
+            action=asdict(action),
+            path=item.path + [asdict(action)],
+        )
+        log_path = output / "logs" / f"transition-{len(transitions):03}.log"
+        log_path.write_text(raw_logs, encoding="utf-8")
+        issues.extend(runtime_issues)
         outside = foreground_package(args.serial, args.adb)
         if outside != args.package:
             issues.append(
@@ -566,6 +670,7 @@ def main() -> int:
                     "evidence": {"package": outside, "action": asdict(action)},
                 }
             )
+            current_state_id = ""
             continue
         destination_id = fingerprint(destination_hierarchy)
         if destination_id not in states:
@@ -575,6 +680,9 @@ def main() -> int:
             destination_id = fingerprint(saved_hierarchy)
             destination_actions = with_scroll_actions(
                 discover_actions(saved_hierarchy), saved_hierarchy
+            )
+            semantics = understand_screen(
+                tokenizer, model, device, saved_hierarchy, destination_actions
             )
             state = StateRecord(
                 id=destination_id,
@@ -587,6 +695,11 @@ def main() -> int:
                     candidate.class_name == "__scroll__"
                     for candidate in destination_actions
                 ),
+                screen_name=str(semantics["screen_name"]),
+                purpose=str(semantics["purpose"]),
+                flow_stage=str(semantics["flow_stage"]),
+                semantic_confidence=int(semantics["confidence"]),
+                semantic_evidence=list(semantics["evidence_anchors"]),
             )
             states[destination_id] = state
             issues.extend(
@@ -597,14 +710,23 @@ def main() -> int:
                     state.screenshot,
                 )
             )
-            enqueue(state, destination_actions)
+            enqueue(state, destination_actions, prioritize=True)
             capture_ordinal += 1
+        current_state_id = destination_id
+        current_hierarchy = destination_hierarchy
         transition = {
             "source": item.source_id,
             "destination": destination_id,
             "action": asdict(action),
             "result": "changed" if destination_id != item.source_id else "no_change",
             "latency_ms": latency_ms,
+            "navigation_mode": "live_session" if reused_session else "replay",
+            "screen": {
+                "name": states[destination_id].screen_name,
+                "purpose": states[destination_id].purpose,
+                "flow_stage": states[destination_id].flow_stage,
+            },
+            "runtime_log": str(log_path.relative_to(output)),
         }
         transitions.append(transition)
         issues.extend(
@@ -626,7 +748,8 @@ def main() -> int:
         )
         print(
             f"states={len(states)} transitions={len(transitions)} "
-            f"frontier={len(frontier)} action={action.label}",
+            f"frontier={len(frontier)} mode={transition['navigation_mode']} "
+            f"screen={states[destination_id].screen_name} action={action.label}",
             flush=True,
         )
 

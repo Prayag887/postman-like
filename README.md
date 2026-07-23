@@ -2,7 +2,7 @@
 
 App Tester is an open-source, local-first desktop application for autonomous Android QA. It is being built to explore an authenticated Android application safely, preserve evidence, and produce reproducible reports for coding agents.
 
-> Early development release: device discovery is working. Autonomous scanning and reports are not implemented yet.
+> Early development release: autonomous scanning works, but coverage is bounded and reports are only as complete as the evidence exposed by the target application and Android.
 
 ## Implemented
 
@@ -13,6 +13,9 @@ App Tester is an open-source, local-first desktop application for autonomous And
 - Android Platform Tools lookup through `APP_TESTER_ADB`, Android SDK environment variables, common SDK locations, and `PATH`.
 - A small JSON CLI for diagnostics and automation.
 - Safety-gated local-model exploration using Qwen3-0.6B, with versioned state and transition evidence.
+- Session-aware depth-first navigation that stays in the current flow and replays only for branch restoration or recovery.
+- Local semantic screen summaries and flow-stage classification.
+- Redacted API/DTO parsing and Android StrictMode incident capture from target-process logcat.
 - Unit tests for ADB output parsing and connection classification.
 - macOS, Windows, and Linux CI; release packaging for macOS Apple Silicon/Intel, Windows, and Linux.
 
@@ -93,7 +96,11 @@ python3 scripts/autonomous_scan.py \
   --max-minutes 15
 ```
 
-Each branch is restored from the authenticated application root and replayed using semantic selectors before its next action runs. The scan directory contains `checkpoint.json`, `graph.json`, `graph.mmd`, `transitions/transitions.jsonl`, `model-decisions.jsonl`, `issues.jsonl`, `coverage.json`, `agent_report.md`, screenshots, and UI hierarchies.
+Newly reached screens are explored depth-first in the existing app session. A branch is restored from the authenticated application root and replayed with semantic selectors only when the desired source screen is no longer open. The local model records a short screen name, purpose, flow stage, and confidence for every state.
+
+Target-process logcat is correlated with the action and screen active at the time. Recognized JSON/DTO parsing failures include the parser/DTO name, redacted curl, redacted response evidence, timestamp, screen, and navigation path when those values were actually logged by the application. StrictMode reports include the screen, triggering action, navigation path, timestamp, and stack excerpt. Secrets in authorization, cookie, API-key, token, password, and session fields are redacted. Missing network evidence is explicitly reported rather than inferred.
+
+The scan directory contains `checkpoint.json`, `graph.json`, `graph.mmd`, `transitions/transitions.jsonl`, `model-decisions.jsonl`, `issues.jsonl`, `coverage.json`, `agent_report.md`, screenshots, UI hierarchies, and per-transition runtime logs.
 
 Limits are explicit. A run that stops with frontier entries remaining reports `complete: false`; it never claims full coverage merely because a configured limit was reached.
 
@@ -101,12 +108,9 @@ Limits are explicit. A run that stops with frontier entries remaining reports `c
 
 - Secure Android 11+ wireless QR pairing and pairing-code fallback.
 - APK file installation and manual login handoff guidance.
-- Multi-pass exploration, reverse transitions, and resume-from-checkpoint beyond the current replay/checkpoint slice.
-- UI hierarchy capture, screenshots, scrolling, replay, and recovery.
-- Deterministic crash, ANR, navigation, loading, layout, accessibility, and form analyzers.
-- Live graph and scan progress.
-- Versioned scan bundles and `agent_report.md`.
-- Optional tiny local model for constrained semantic classification.
+- Resume-from-checkpoint and explicit pause/cancel controls.
+- Deterministic crash, ANR, loading, and form analyzers.
+- Live visual graph rendering.
 - Android fixture application and emulator integration tests.
 
 Do not treat roadmap items as available functionality.

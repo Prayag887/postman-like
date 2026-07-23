@@ -15,9 +15,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 MODEL_ID = "Qwen/Qwen3-0.6B"
 BLOCKED_WORDS = {
     "accept",
@@ -107,6 +104,8 @@ def discover_actions(hierarchy: str) -> list[Action]:
     for node in root.iter("node"):
         if node.attrib.get("clickable") != "true" or node.attrib.get("enabled") != "true":
             continue
+        if node.attrib.get("selected") == "true":
+            continue
         bounds = node.attrib.get("bounds", "")
         match = BOUNDS.fullmatch(bounds)
         if not match:
@@ -152,6 +151,9 @@ def fingerprint(hierarchy: str) -> str:
 
 
 def load_model() -> tuple[Any, Any, str]:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     dtype = torch.float16 if device == "mps" else torch.float32
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
@@ -173,6 +175,107 @@ def extract_json(text: str) -> dict[str, Any]:
     return value
 
 
+def understand_screen(
+    tokenizer: Any,
+    model: Any,
+    device: str,
+    hierarchy: str,
+    actions: list[Action],
+) -> dict[str, Any]:
+    import torch
+
+    root = ET.fromstring(hierarchy)
+    visible: list[str] = []
+    for node in root.iter("node"):
+        for key in ("text", "content-desc"):
+            value = node.attrib.get(key, "").strip()
+            if value and value not in visible:
+                visible.append(value[:160])
+    evidence = {
+        "visible_text": visible[:40],
+        "actions": [
+            {"label": action.label, "role": action.class_name}
+            for action in actions[:24]
+        ],
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Summarize an Android screen using only supplied UI evidence. "
+                "Return strict JSON with: screen_name (short noun phrase), "
+                "purpose (one sentence), flow_stage (entry, browse, detail, form, "
+                "confirmation, settings, error, or unknown), and confidence "
+                "(integer 0-100). Do not invent app behavior."
+            ),
+        },
+        {"role": "user", "content": json.dumps(evidence)},
+    ]
+    prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    with torch.inference_mode():
+        output = model.generate(
+            **inputs,
+            max_new_tokens=128,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    response = tokenizer.decode(
+        output[0][inputs["input_ids"].shape[-1] :],
+        skip_special_tokens=True,
+    ).strip()
+    try:
+        match = re.search(r"\{.*\}", response, re.DOTALL)
+        if not match:
+            raise ValueError("model returned no JSON object")
+        result = json.loads(match.group())
+        required = ("screen_name", "purpose", "flow_stage", "confidence")
+        if not all(key in result for key in required):
+            raise ValueError("screen understanding omitted required fields")
+        result["confidence"] = max(0, min(95, int(result["confidence"])))
+        if result["flow_stage"] not in {
+            "entry",
+            "browse",
+            "detail",
+            "form",
+            "confirmation",
+            "settings",
+            "error",
+            "unknown",
+        }:
+            result["flow_stage"] = "unknown"
+        if result["flow_stage"] == "unknown":
+            class_names = {action.class_name for action in actions}
+            combined = " ".join(visible).casefold()
+            if any("edittext" in name.casefold() for name in class_names):
+                result["flow_stage"] = "form"
+            elif "setting" in combined:
+                result["flow_stage"] = "settings"
+            elif re.search(r"\b(error|failed|try again)\b", combined):
+                result["flow_stage"] = "error"
+            elif actions:
+                result["flow_stage"] = "browse"
+        result["evidence_anchors"] = visible[:8]
+        result["raw_response"] = response
+        return result
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        fallback = visible[0] if visible else "Unknown screen"
+        return {
+            "screen_name": fallback[:80],
+            "purpose": "Insufficient semantic evidence for a reliable summary.",
+            "flow_stage": "unknown",
+            "confidence": 0,
+            "evidence_anchors": visible[:8],
+            "validation_error": str(error),
+            "raw_response": response,
+        }
+
+
 def choose_action(
     tokenizer: Any,
     model: Any,
@@ -180,6 +283,8 @@ def choose_action(
     actions: list[Action],
     executed: set[tuple[str, str]],
 ) -> tuple[Action | None, dict[str, Any]]:
+    import torch
+
     eligible = [
         action
         for action in actions
