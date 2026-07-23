@@ -13,6 +13,8 @@ struct ScanSummary {
     frontier_remaining: usize,
     complete: bool,
     issues: usize,
+    #[serde(default)]
+    equivalent_actions_skipped: usize,
 }
 
 #[tauri::command]

@@ -49,14 +49,27 @@ class FrontierItem:
     action: dict[str, Any]
 
 
+@dataclass
+class SamplingGroup:
+    key: str
+    screen_name: str
+    variant: str
+    representative: str
+    skipped: list[str]
+
+
 RISKY_WORDS = re.compile(
     r"\b(delete|remove|logout|sign out|pay|purchase|buy|transfer|send|post|"
     r"publish|submit|unsubscribe|cancel subscription|accept|agree)\b",
     re.IGNORECASE,
 )
-NAVIGATION_WORDS = re.compile(
-    r"\b(view|details?|all|home|class|exam|assignment|practice|settings?|"
-    r"profile|notification|search|back|next|menu|tab|today|tomorrow|upcoming)\b",
+CARD_VARIANTS = (
+    ("completed", re.compile(r"\b(completed|finished|ended|past)\b", re.I)),
+    ("ongoing", re.compile(r"\b(ongoing|in progress|live now|happening now)\b", re.I)),
+    ("upcoming", re.compile(r"\b(upcoming|scheduled|starts? in|future)\b", re.I)),
+)
+CARD_LIKE = re.compile(
+    r"\b(class|course|exam|assignment|lesson|session|event|booking|order)\b",
     re.IGNORECASE,
 )
 
@@ -152,6 +165,59 @@ def is_immediate_loop(
     return bool(path and action_key(path[-1])[:2] == action_key(action)[:2])
 
 
+def card_equivalence_key(
+    screen_name: str, action: Action | dict[str, Any]
+) -> tuple[str, str] | None:
+    value = asdict(action) if isinstance(action, Action) else action
+    label = str(value.get("label", "")).strip()
+    context = str(value.get("context", "")).strip()
+    semantic_text = f"{context} {label}".strip()
+    class_name = str(value.get("class_name", ""))
+    if (
+        not label
+        or class_name == "__scroll__"
+        or not CARD_LIKE.search(semantic_text)
+    ):
+        return None
+    for variant, pattern in CARD_VARIANTS:
+        if pattern.search(semantic_text):
+            action_role = re.sub(r"\s+", " ", label.casefold())
+            return (
+                f"{screen_name.casefold()}|{class_name}|{variant}|{action_role}",
+                variant,
+            )
+    return None
+
+
+class RepresentativeSampler:
+    def __init__(self) -> None:
+        self.groups: dict[str, SamplingGroup] = {}
+
+    def accept(
+        self, screen_name: str, action: Action | dict[str, Any]
+    ) -> bool:
+        grouped = card_equivalence_key(screen_name, action)
+        if grouped is None:
+            return True
+        key, variant = grouped
+        value = asdict(action) if isinstance(action, Action) else action
+        label = str(value.get("label", ""))
+        if key not in self.groups:
+            self.groups[key] = SamplingGroup(
+                key=key,
+                screen_name=screen_name,
+                variant=variant,
+                representative=label,
+                skipped=[],
+            )
+            return True
+        self.groups[key].skipped.append(label)
+        return False
+
+    def records(self) -> list[dict[str, Any]]:
+        return [asdict(group) for group in self.groups.values()]
+
+
 def best_match(actions: list[Action], selector: dict[str, Any]) -> Action | None:
     key = action_key(selector)
     for action in actions:
@@ -222,6 +288,12 @@ def foreground_package(serial: str, binary: str) -> str | None:
     return match.group(1) if match else None
 
 
+def foreground_component(serial: str, binary: str) -> str | None:
+    output = run_adb(serial, binary, "shell", "dumpsys", "window")
+    match = re.search(r"mCurrentFocus=.*? ([A-Za-z0-9._]+/[A-Za-z0-9._$]+)", output)
+    return match.group(1) if match else None
+
+
 def restore_path(
     serial: str,
     package: str,
@@ -269,7 +341,11 @@ def state_issues(
                     "confidence": 100,
                     "state_id": state_id,
                     "title": "Clickable control has no accessible label",
-                    "evidence": {"bounds": action.bounds, "screenshot": screenshot},
+                    "evidence": {
+                        "action": asdict(action),
+                        "bounds": action.bounds,
+                        "screenshot": screenshot,
+                    },
                 }
             )
         if dimensions:
@@ -283,6 +359,7 @@ def state_issues(
                         "state_id": state_id,
                         "title": f"Touch target may be too small: {action.label}",
                         "evidence": {
+                            "action": asdict(action),
                             "bounds": action.bounds,
                             "screenshot": screenshot,
                         },
@@ -309,21 +386,50 @@ def transition_issues(
     action: dict[str, Any],
     latency_ms: int,
     screenshot: str,
+    screen_name: str,
+    path: list[dict[str, Any]],
+    observable_effects: list[str],
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if (
-        source_id == destination_id
-        and NAVIGATION_WORDS.search(str(action.get("label", "")))
+        not observable_effects
         and action.get("class_name") != "__scroll__"
     ):
         issues.append(
             {
                 "category": "navigation",
-                "severity": "minor",
-                "confidence": 70,
+                "severity": "major",
+                "confidence": 90,
                 "state_id": source_id,
-                "title": f"Navigation control produced no observable change: {action['label']}",
-                "evidence": {"action": action, "screenshot": screenshot},
+                "screen_name": screen_name,
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "title": f"Control produced no observable effect: {action['label']}",
+                "symptom": (
+                    "The control accepted a tap, but the UI hierarchy, foreground "
+                    "activity, package, and captured network/runtime signals did not change."
+                ),
+                "likely_causes": [
+                    "The click handler is missing or not connected.",
+                    "The handler returned early because required state was unavailable.",
+                    "The control is visually enabled while its action is disabled.",
+                ],
+                "reproduction": {
+                    "navigation_path": path,
+                    "action": action,
+                },
+                "developer_next_steps": [
+                    "Verify the control's click listener or callback is registered.",
+                    "Inspect guard clauses and disabled/loading state for this action.",
+                    "Add an observable success or error state and a regression test.",
+                ],
+                "evidence": {
+                    "action": action,
+                    "screenshot": screenshot,
+                    "source_state": source_id,
+                    "destination_state": destination_id,
+                    "observable_effects": observable_effects,
+                    "observation_window_ms": latency_ms,
+                },
             }
         )
     # UIAutomator stability polling adds several seconds on its own. Only flag
@@ -377,6 +483,99 @@ def deduplicate_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return ordered
 
 
+def make_actionable(
+    issue: dict[str, Any], states: dict[str, StateRecord]
+) -> dict[str, Any]:
+    state = states.get(issue["state_id"])
+    category = issue["category"]
+    defaults = {
+        "accessibility": {
+            "causes": [
+                "The component is missing a content description or semantic label.",
+                "The visual hit area does not match the accessible control bounds.",
+            ],
+            "next": [
+                "Add a stable accessible label describing the control's action.",
+                "Ensure the touch target is at least 48×48 dp without overlapping controls.",
+                "Add an accessibility assertion for this screen.",
+            ],
+        },
+        "parsing": {
+            "causes": [
+                "The API response shape does not match the DTO or serializer contract.",
+                "A nullable, enum, or numeric field is stricter than the server payload.",
+            ],
+            "next": [
+                "Replay the redacted curl against the same environment.",
+                "Compare the captured response with the named DTO/serializer.",
+                "Add the payload as a parser regression fixture before adjusting the contract.",
+            ],
+        },
+        "strict_mode": {
+            "causes": [
+                "Disk, network, or other blocking work ran on a policy-restricted thread.",
+                "A lifecycle callback synchronously invoked an expensive dependency.",
+            ],
+            "next": [
+                "Use the stack excerpt to identify the first application-owned frame.",
+                "Move blocking work to an appropriate dispatcher/executor.",
+                "Add a StrictMode regression test for the reproduction flow.",
+            ],
+        },
+        "layout": {
+            "causes": [
+                "The screen rendered without semantic content.",
+                "Loading, empty, or error state handling did not produce visible UI.",
+            ],
+            "next": [
+                "Inspect loading and error state branches for the recorded screen.",
+                "Add a screenshot/semantics regression test for the reproduction state.",
+            ],
+        },
+        "performance": {
+            "causes": [
+                "The action blocks on synchronous work or a slow dependency.",
+                "The destination waits too long before exposing stable UI.",
+            ],
+            "next": [
+                "Trace the recorded action through navigation and data loading.",
+                "Measure device-side rendering and request latency separately.",
+            ],
+        },
+        "navigation": {
+            "causes": ["The navigation destination or action handler behaved unexpectedly."],
+            "next": ["Reproduce the recorded path and inspect the action handler."],
+        },
+    }
+    selected = defaults.get(category, defaults["navigation"])
+    screen_name = issue.get("screen_name") or (
+        state.screen_name if state else "Unknown screen"
+    )
+    symptom = issue.get("symptom") or issue["title"]
+    if category == "accessibility" and issue["title"].startswith(
+        "Clickable control has no accessible label"
+    ):
+        bounds = issue.get("evidence", {}).get("bounds", "unknown bounds")
+        symptom = (
+            f"On {screen_name}, the clickable control at {bounds} has no text, "
+            "content description, or semantic label. Screen readers and UI "
+            "automation cannot determine what the control does."
+        )
+    reproduction = issue.get("reproduction") or issue.get("how_it_occurred") or {
+        "navigation_path": state.path if state else [],
+        "action": issue.get("evidence", {}).get("action"),
+    }
+    return {
+        **issue,
+        "screen_name": screen_name,
+        "symptom": symptom,
+        "likely_causes": issue.get("likely_causes") or selected["causes"],
+        "reproduction": reproduction,
+        "developer_next_steps": issue.get("developer_next_steps")
+        or selected["next"],
+    }
+
+
 def write_outputs(
     output: Path,
     metadata: dict[str, Any],
@@ -385,8 +584,11 @@ def write_outputs(
     issues: list[dict[str, Any]],
     model_decisions: list[dict[str, Any]],
     frontier_remaining: int,
+    sampling: list[dict[str, Any]],
 ) -> None:
-    issue_list = deduplicate_issues(issues)
+    issue_list = [
+        make_actionable(issue, states) for issue in deduplicate_issues(issues)
+    ]
     graph = {
         "schema_version": 1,
         "states": [asdict(state) for state in states.values()],
@@ -423,74 +625,70 @@ def write_outputs(
     (output / "coverage.json").write_text(
         json.dumps(coverage, indent=2), encoding="utf-8"
     )
-    report = [
-        "# Autonomous Android QA report",
-        "",
-        f"- Package: `{metadata['package']}`",
-        f"- Device: `{metadata['serial']}`",
-        f"- Local model: `{metadata['model']}`",
-        f"- States discovered: {len(states)}",
-        f"- Transitions recorded: {len(transitions)}",
-        f"- Remaining frontier: {frontier_remaining}",
-        f"- Issues: {len(issue_list)}",
-        "",
-        "## Screen catalog",
-        "",
-    ]
-    for state in states.values():
-        report.extend(
-            [
-                f"### {state.ordinal}: {state.screen_name}",
-                "",
-                f"- Purpose: {state.purpose}",
-                f"- Flow stage: `{state.flow_stage}`",
-                f"- Semantic confidence: {state.semantic_confidence}%",
-                f"- Evidence anchors: {', '.join(state.semantic_evidence) or 'None'}",
-                f"- State: `{state.id}`",
-                "",
-            ]
-        )
-    report.extend(
-        [
-        "## Ordered issues",
-        "",
-        ]
+    sampling_summary = {
+        "representatives_tested": len(sampling),
+        "equivalent_actions_skipped": sum(
+            len(group["skipped"]) for group in sampling
+        ),
+        "groups": sampling,
+    }
+    (output / "sampling.json").write_text(
+        json.dumps(sampling_summary, indent=2), encoding="utf-8"
     )
+    report_path = output / "agent_report.md"
     if not issue_list:
-        report.append("No high-confidence deterministic issues were detected.")
-    for issue in issue_list:
-        report.extend(
+        report_path.unlink(missing_ok=True)
+    else:
+        report = [
+            "# Actionable Android QA issues",
+            "",
+            f"- Package: `{metadata['package']}`",
+            f"- Device: `{metadata['serial']}`",
+            f"- Issues requiring action: {len(issue_list)}",
+            "",
+            "This file intentionally contains only confirmed issue packets.",
+            "",
+        ]
+        for issue in issue_list:
+            report.extend(
             [
                 f"## {issue['id']} — {issue['title']}",
                 "",
                 f"**Severity:** {issue['severity'].title()}",
                 f"**Confidence:** {issue['confidence']}%",
-                f"**Category:** {issue['category'].title()}",
-                f"**State:** `{issue['state_id']}`",
-                f"**Occurrences:** {issue['occurrences']}",
-                *(
-                    [f"**Screen:** {issue['screen_name']}"]
-                    if issue.get("screen_name")
-                    else []
-                ),
-                *(
-                    [f"**Occurred:** {issue['occurred_at']}"]
-                    if issue.get("occurred_at")
-                    else []
-                ),
+                f"**Screen:** {issue['screen_name']}",
+                f"**Category:** {issue['category']}",
+                "",
+                "### What happened",
+                "",
+                issue["symptom"],
+                "",
+                "### Likely causes",
+                "",
+                *[f"- {cause}" for cause in issue["likely_causes"]],
+                "",
+                "### How to reproduce",
+                "",
+                f"```json\n{json.dumps(issue['reproduction'], indent=2)}\n```",
                 "",
                 "### Evidence",
                 "",
                 f"```json\n{json.dumps(issue['evidence'], indent=2)}\n```",
                 "",
+                "### Developer next steps",
+                "",
+                *[f"- {step}" for step in issue["developer_next_steps"]],
+                "",
             ]
         )
-    (output / "agent_report.md").write_text("\n".join(report), encoding="utf-8")
+        report_path.write_text("\n".join(report), encoding="utf-8")
     summary = {
         **metadata,
         "completed_at": datetime.now(timezone.utc).isoformat(),
         **coverage,
         "issues": len(issue_list),
+        "issue_report": "agent_report.md" if issue_list else None,
+        **{key: value for key, value in sampling_summary.items() if key != "groups"},
     }
     (output / "summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
@@ -558,6 +756,7 @@ def main() -> int:
     frontier: deque[FrontierItem] = deque()
     queued: set[tuple[str, tuple[str, str, str]]] = set()
     model_decisions: list[dict[str, Any]] = []
+    sampler = RepresentativeSampler()
 
     def enqueue(
         state: StateRecord, actions: list[Action], *, prioritize: bool = False
@@ -575,10 +774,17 @@ def main() -> int:
             action for action in actions if preferred is None or action_key(action) != action_key(preferred)
         ]
         eligible: list[FrontierItem] = []
+        sampling_scope = (
+            str(state.path[0].get("label", state.screen_name))
+            if state.path
+            else state.screen_name
+        )
         for action in ordered:
             if action.risk != "safe" or RISKY_WORDS.search(action.label):
                 continue
             if is_immediate_loop(state.path, action):
+                continue
+            if not sampler.accept(sampling_scope, action):
                 continue
             key = (state.id, action_key(action))
             if key in queued:
@@ -645,8 +851,15 @@ def main() -> int:
         action = best_match(current_actions, item.action)
         if action is None:
             continue
+        source_fingerprint = fingerprint(source_hierarchy)
+        component_before = foreground_component(args.serial, args.adb)
         started = time.monotonic()
         perform_action(args.serial, args.adb, action)
+        time.sleep(0.25)
+        try:
+            intermediate_hierarchy = dump_hierarchy(args.serial, args.adb)
+        except subprocess.CalledProcessError:
+            intermediate_hierarchy = source_hierarchy
         destination_hierarchy = wait_for_stability(args.serial, args.adb)
         latency_ms = round((time.monotonic() - started) * 1000)
         raw_logs, runtime_issues = collector.collect(
@@ -659,6 +872,7 @@ def main() -> int:
         log_path.write_text(raw_logs, encoding="utf-8")
         issues.extend(runtime_issues)
         outside = foreground_package(args.serial, args.adb)
+        component_after = foreground_component(args.serial, args.adb)
         if outside != args.package:
             issues.append(
                 {
@@ -673,6 +887,17 @@ def main() -> int:
             current_state_id = ""
             continue
         destination_id = fingerprint(destination_hierarchy)
+        observable_effects: list[str] = []
+        if fingerprint(intermediate_hierarchy) != source_fingerprint:
+            observable_effects.append("intermediate_ui_changed")
+        if destination_id != source_fingerprint:
+            observable_effects.append("stable_ui_changed")
+        if component_after != component_before:
+            observable_effects.append("foreground_activity_changed")
+        if re.search(r"-->\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+", raw_logs):
+            observable_effects.append("network_request_observed")
+        if runtime_issues:
+            observable_effects.append("runtime_incident_observed")
         if destination_id not in states:
             saved_hierarchy, saved_screenshot = capture(
                 args.serial, output, capture_ordinal, args.adb
@@ -727,6 +952,7 @@ def main() -> int:
                 "flow_stage": states[destination_id].flow_stage,
             },
             "runtime_log": str(log_path.relative_to(output)),
+            "observable_effects": observable_effects,
         }
         transitions.append(transition)
         issues.extend(
@@ -736,6 +962,9 @@ def main() -> int:
                 transition["action"],
                 latency_ms,
                 states[destination_id].screenshot,
+                states[item.source_id].screen_name,
+                item.path + [asdict(action)],
+                observable_effects,
             )
         )
         checkpoint = {
@@ -761,6 +990,7 @@ def main() -> int:
         issues,
         model_decisions,
         len(frontier),
+        sampler.records(),
     )
     print(f"Scan recorded at {output.resolve()}")
     return 0

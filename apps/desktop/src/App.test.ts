@@ -65,6 +65,7 @@ describe("live scan metrics", () => {
       frontier_remaining: 13,
       complete: false,
       issues: 2,
+      equivalent_actions_skipped: 97,
     };
     expect(
       parseScanMetrics(["states=6 transitions=5 frontier=54"], summary),

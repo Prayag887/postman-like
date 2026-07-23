@@ -51,6 +51,7 @@ class Action:
     x: int
     y: int
     risk: str
+    context: str = ""
 
 
 def adb(serial: str, *args: str, binary: str = "adb", text: bool = True) -> Any:
@@ -99,6 +100,7 @@ def node_label(node: ET.Element) -> str:
 
 def discover_actions(hierarchy: str) -> list[Action]:
     root = ET.fromstring(hierarchy)
+    parents = {child: parent for parent in root.iter() for child in parent}
     actions: list[Action] = []
     seen: set[tuple[str, str]] = set()
     for node in root.iter("node"):
@@ -114,6 +116,16 @@ def discover_actions(hierarchy: str) -> list[Action]:
         if x2 <= x1 or y2 <= y1:
             continue
         label = node_label(node)
+        context = ""
+        parent = parents.get(node)
+        if parent is not None:
+            context_values: list[str] = []
+            for descendant in parent.iter():
+                for attribute in ("text", "content-desc"):
+                    value = descendant.attrib.get(attribute, "").strip()
+                    if value and value not in context_values:
+                        context_values.append(value)
+            context = " · ".join(context_values[:12])
         key = (label.casefold(), bounds)
         if key in seen:
             continue
@@ -129,6 +141,7 @@ def discover_actions(hierarchy: str) -> list[Action]:
                 x=(x1 + x2) // 2,
                 y=(y1 + y2) // 2,
                 risk=risk,
+                context=context[:500],
             )
         )
     return actions
@@ -194,7 +207,11 @@ def understand_screen(
     evidence = {
         "visible_text": visible[:40],
         "actions": [
-            {"label": action.label, "role": action.class_name}
+            {
+                "label": action.label,
+                "role": action.class_name,
+                "context": action.context[:240],
+            }
             for action in actions[:24]
         ],
     }
@@ -297,6 +314,7 @@ def choose_action(
             "action_index": position,
             "label": action.label,
             "role": action.class_name,
+            "context": action.context[:240],
         }
         for position, action in enumerate(eligible[:24])
     ]

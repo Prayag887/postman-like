@@ -27,4 +27,5 @@ export interface ScanSummary {
   frontier_remaining: number;
   complete: boolean;
   issues: number;
+  equivalent_actions_skipped: number;
 }

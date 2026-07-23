@@ -552,9 +552,13 @@ export function App() {
               </h2>
               <p>
                 {scanSummary.issues} issues recorded.{" "}
-                {scanSummary.frontier_remaining} frontier actions remain.
+                {scanSummary.frontier_remaining} frontier actions remain.{" "}
+                {scanSummary.equivalent_actions_skipped} equivalent repeated
+                actions were skipped.
               </p>
-              {scanOutput && <code>{scanOutput}/agent_report.md</code>}
+              {scanOutput && scanSummary.issues > 0 && (
+                <code>{scanOutput}/agent_report.md</code>
+              )}
             </section>
           )}
 

@@ -14,8 +14,10 @@ App Tester is an open-source, local-first desktop application for autonomous And
 - A small JSON CLI for diagnostics and automation.
 - Safety-gated local-model exploration using Qwen3-0.6B, with versioned state and transition evidence.
 - Session-aware depth-first navigation that stays in the current flow and replays only for branch restoration or recovery.
+- Representative sampling for repeated completed, ongoing, and upcoming card families.
 - Local semantic screen summaries and flow-stage classification.
 - Redacted API/DTO parsing and Android StrictMode incident capture from target-process logcat.
+- Observable-effect checks for every safe control, including arbitrary controls whose labels do not look navigational.
 - Unit tests for ADB output parsing and connection classification.
 - macOS, Windows, and Linux CI; release packaging for macOS Apple Silicon/Intel, Windows, and Linux.
 
@@ -100,7 +102,11 @@ Newly reached screens are explored depth-first in the existing app session. A br
 
 Target-process logcat is correlated with the action and screen active at the time. Recognized JSON/DTO parsing failures include the parser/DTO name, redacted curl, redacted response evidence, timestamp, screen, and navigation path when those values were actually logged by the application. StrictMode reports include the screen, triggering action, navigation path, timestamp, and stack excerpt. Secrets in authorization, cookie, API-key, token, password, and session fields are redacted. Missing network evidence is explicitly reported rather than inferred.
 
-The scan directory contains `checkpoint.json`, `graph.json`, `graph.mmd`, `transitions/transitions.jsonl`, `model-decisions.jsonl`, `issues.jsonl`, `coverage.json`, `agent_report.md`, screenshots, UI hierarchies, and per-transition runtime logs.
+The scan directory contains `checkpoint.json`, `graph.json`, `graph.mmd`, `transitions/transitions.jsonl`, `model-decisions.jsonl`, `issues.jsonl`, `coverage.json`, `sampling.json`, screenshots, UI hierarchies, and per-transition runtime logs. `agent_report.md` is added only when issues exist.
+
+Repeated card collections are sampled by semantic variant. For example, a list with completed, ongoing, and upcoming live-class cards tests one representative of each group and records the equivalent skipped cards in `sampling.json`. Controls are considered effective when the scanner observes a UI hierarchy change, foreground activity change, network request, external navigation, or runtime incident.
+
+`agent_report.md` is created only when at least one issue exists. It contains issue packets—not general scan inventory—with the symptom, likely causes, reproduction path, evidence, and developer next steps. Issue-free runs have no `agent_report.md`; their non-issue coverage data remains in the machine-readable scan artifacts.
 
 Limits are explicit. A run that stops with frontier entries remaining reports `complete: false`; it never claims full coverage merely because a configured limit was reached.
 
