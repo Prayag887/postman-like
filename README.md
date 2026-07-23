@@ -12,6 +12,7 @@ App Tester is an open-source, local-first desktop application for autonomous And
 - Device model, Android version, API level, resolution, density, and CPU architecture.
 - Android Platform Tools lookup through `APP_TESTER_ADB`, Android SDK environment variables, common SDK locations, and `PATH`.
 - A small JSON CLI for diagnostics and automation.
+- Safety-gated local-model exploration using Qwen3-0.6B, with versioned state and transition evidence.
 - Unit tests for ADB output parsing and connection classification.
 - macOS, Windows, and Linux CI; release packaging for macOS Apple Silicon/Intel, Windows, and Linux.
 
@@ -60,11 +61,34 @@ To use a specific ADB binary:
 APP_TESTER_ADB=/absolute/path/to/adb cargo run -p app-tester
 ```
 
+## Local-model scan
+
+The first autonomous vertical slice uses the official `Qwen/Qwen3-0.6B` model through local PyTorch inference. The initial model download is approximately 1.4 GB on disk and is reused offline afterward.
+
+Install the local-only model dependencies:
+
+```bash
+python3 -m pip install -r scripts/requirements-local-model.txt
+```
+
+Launch and log into the Android application, then run a bounded safe scan:
+
+```bash
+python3 scripts/local_model_scan.py \
+  --serial emulator-5554 \
+  --package com.example.app \
+  --steps 4
+```
+
+The scanner captures screenshots and UI hierarchies, fingerprints states, discovers clickable actions, blocks deterministic high-risk language, asks the local model only to rank remaining safe actions, validates its JSON response, and records every transition under `scan-results/`. Scan results are ignored by Git because they can contain private application data.
+
+This is currently a developer-facing vertical slice. Live progress and scan controls are not yet connected to the desktop Live Scan screen.
+
 ## Roadmap (not yet implemented)
 
 - Secure Android 11+ wireless QR pairing and pairing-code fallback.
 - Application/APK selection, launch, and manual login handoff.
-- Persistent, safety-aware state/action exploration.
+- Persistent multi-pass state/action exploration beyond the current bounded local-model slice.
 - UI hierarchy capture, screenshots, scrolling, replay, and recovery.
 - Deterministic crash, ANR, navigation, loading, layout, accessibility, and form analyzers.
 - Live graph and scan progress.
