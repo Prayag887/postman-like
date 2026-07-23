@@ -66,8 +66,23 @@ def adb(serial: str, *args: str, binary: str = "adb", text: bool = True) -> Any:
 
 def capture(serial: str, directory: Path, step: int, adb_binary: str) -> tuple[str, Path]:
     remote = "/sdcard/app-tester-window.xml"
-    adb(serial, "shell", "uiautomator", "dump", remote, binary=adb_binary)
-    hierarchy = adb(serial, "shell", "cat", remote, binary=adb_binary)
+    hierarchy = ""
+    last_error: subprocess.CalledProcessError | None = None
+    for attempt in range(5):
+        try:
+            adb(serial, "shell", "uiautomator", "dump", remote, binary=adb_binary)
+            hierarchy = adb(
+                serial, "shell", "cat", remote, binary=adb_binary
+            )
+            if hierarchy.strip():
+                break
+        except subprocess.CalledProcessError as error:
+            last_error = error
+        time.sleep(0.25 * (attempt + 1))
+    if not hierarchy.strip():
+        if last_error:
+            raise last_error
+        raise RuntimeError("UI hierarchy capture returned no content")
     hierarchy_path = directory / "hierarchies" / f"state-{step:03}.xml"
     hierarchy_path.write_text(hierarchy, encoding="utf-8")
     screenshot_path = directory / "screenshots" / f"state-{step:03}.png"
@@ -338,6 +353,10 @@ def understand_screen(
         variants = result.get("action_variants", [])
         if not isinstance(variants, list):
             variants = []
+        role_counts: dict[tuple[str, str], int] = {}
+        for action in actions[:24]:
+            role = (action.class_name, action.label.casefold())
+            role_counts[role] = role_counts.get(role, 0) + 1
         validated_variants: list[dict[str, Any]] = []
         for variant in variants:
             if not isinstance(variant, dict):
@@ -352,6 +371,14 @@ def understand_screen(
                 0 <= action_index < min(len(actions), 24)
                 and collection
                 and group
+                and role_counts.get(
+                    (
+                        actions[action_index].class_name,
+                        actions[action_index].label.casefold(),
+                    ),
+                    0,
+                )
+                >= 2
             ):
                 validated_variants.append(
                     {
@@ -360,15 +387,15 @@ def understand_screen(
                         "variant": group[:80],
                     }
                 )
-        result["action_variants"] = validated_variants
-        classified = {
-            variant["action_index"] for variant in validated_variants
+        inferred_variants = infer_contextual_action_variants(actions[:24])
+        inferred_indices = {
+            variant["action_index"] for variant in inferred_variants
         }
-        result["action_variants"].extend(
+        result["action_variants"] = inferred_variants + [
             variant
-            for variant in infer_contextual_action_variants(actions[:24])
-            if variant["action_index"] not in classified
-        )
+            for variant in validated_variants
+            if variant["action_index"] not in inferred_indices
+        ]
         result["raw_response"] = response
         return result
     except (ValueError, TypeError, json.JSONDecodeError) as error:

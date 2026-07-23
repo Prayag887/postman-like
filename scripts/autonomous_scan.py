@@ -48,6 +48,7 @@ class FrontierItem:
     source_id: str
     path: list[dict[str, Any]]
     action: dict[str, Any]
+    semantic_key: str | None = None
 
 
 @dataclass
@@ -155,6 +156,23 @@ def is_immediate_loop(
     path: list[dict[str, Any]], action: Action | dict[str, Any]
 ) -> bool:
     return bool(path and action_key(path[-1])[:2] == action_key(action)[:2])
+
+
+def semantic_action_key(
+    scope: str,
+    action: Action | dict[str, Any],
+    classification: dict[str, Any] | None,
+) -> str | None:
+    if classification:
+        return None
+    value = asdict(action) if isinstance(action, Action) else action
+    if value.get("class_name") == "__scroll__":
+        return None
+    label = re.sub(r"\s+", " ", str(value.get("label", "")).casefold()).strip()
+    class_name = str(value.get("class_name", ""))
+    if not label:
+        return None
+    return f"{scope.casefold()}|{class_name}|{label}"
 
 
 def card_equivalence_key(
@@ -737,6 +755,8 @@ def main() -> int:
     issues = state_issues(root_id, hierarchy, root_actions, str(screenshot.relative_to(output)))
     frontier: deque[FrontierItem] = deque()
     queued: set[tuple[str, tuple[str, str, str]]] = set()
+    queued_semantic_actions: set[str] = set()
+    tested_semantic_actions: set[str] = set()
     model_decisions: list[dict[str, Any]] = []
     sampler = RepresentativeSampler()
 
@@ -770,19 +790,31 @@ def main() -> int:
                 continue
             if is_immediate_loop(state.path, action):
                 continue
-            if not sampler.accept(
-                sampling_scope, action, variants_by_index.get(action.index)
+            classification = variants_by_index.get(action.index)
+            if not sampler.accept(sampling_scope, action, classification):
+                continue
+            semantic_key = semantic_action_key(
+                f"{sampling_scope}|{state.screen_name}",
+                action,
+                classification,
+            )
+            if semantic_key and (
+                semantic_key in queued_semantic_actions
+                or semantic_key in tested_semantic_actions
             ):
                 continue
             key = (state.id, action_key(action))
             if key in queued:
                 continue
             queued.add(key)
+            if semantic_key:
+                queued_semantic_actions.add(semantic_key)
             eligible.append(
                 FrontierItem(
                     source_id=state.id,
                     path=state.path,
                     action=asdict(action),
+                    semantic_key=semantic_key,
                 )
             )
         if prioritize:
@@ -806,7 +838,22 @@ def main() -> int:
         and time.monotonic() < deadline
     ):
         item = frontier.popleft()
+        if item.semantic_key and item.semantic_key in tested_semantic_actions:
+            continue
+        actual_source_id = item.source_id
         reused_session = current_state_id == item.source_id
+        if (
+            not reused_session
+            and current_state_id in states
+            and states[current_state_id].screen_name
+            == states[item.source_id].screen_name
+        ):
+            live_actions = with_scroll_actions(
+                discover_actions(current_hierarchy), current_hierarchy
+            )
+            if best_match(live_actions, item.action) is not None:
+                actual_source_id = current_state_id
+                reused_session = True
         source_hierarchy = current_hierarchy
         if not reused_session:
             restored, source_hierarchy = restore_path(
@@ -823,26 +870,32 @@ def main() -> int:
                         "navigation_mode": "replay",
                     }
                 )
+                if item.semantic_key:
+                    queued_semantic_actions.discard(item.semantic_key)
                 current_state_id = ""
                 continue
             current_state_id = item.source_id
             current_hierarchy = source_hierarchy
         collector.collect(
-            state_id=item.source_id,
-            screen_name=states[item.source_id].screen_name,
+            state_id=actual_source_id,
+            screen_name=states[actual_source_id].screen_name,
             action=None,
-            path=item.path,
+            path=states[actual_source_id].path,
         )
         current_actions = with_scroll_actions(
             discover_actions(source_hierarchy), source_hierarchy
         )
         action = best_match(current_actions, item.action)
         if action is None:
+            if item.semantic_key:
+                queued_semantic_actions.discard(item.semantic_key)
             continue
         source_fingerprint = fingerprint(source_hierarchy)
         component_before = foreground_component(args.serial, args.adb)
         started = time.monotonic()
         perform_action(args.serial, args.adb, action)
+        if item.semantic_key:
+            tested_semantic_actions.add(item.semantic_key)
         time.sleep(0.25)
         try:
             intermediate_hierarchy = dump_hierarchy(args.serial, args.adb)
@@ -851,10 +904,10 @@ def main() -> int:
         destination_hierarchy = wait_for_stability(args.serial, args.adb)
         latency_ms = round((time.monotonic() - started) * 1000)
         raw_logs, runtime_issues = collector.collect(
-            state_id=item.source_id,
-            screen_name=states[item.source_id].screen_name,
+            state_id=actual_source_id,
+            screen_name=states[actual_source_id].screen_name,
             action=asdict(action),
-            path=item.path + [asdict(action)],
+            path=states[actual_source_id].path + [asdict(action)],
         )
         log_path = output / "logs" / f"transition-{len(transitions):03}.log"
         log_path.write_text(raw_logs, encoding="utf-8")
@@ -867,7 +920,7 @@ def main() -> int:
                     "category": "navigation",
                     "severity": "major",
                     "confidence": 100,
-                    "state_id": item.source_id,
+                    "state_id": actual_source_id,
                     "title": f"Action opened external package: {action.label}",
                     "evidence": {"package": outside, "action": asdict(action)},
                 }
@@ -900,7 +953,7 @@ def main() -> int:
             state = StateRecord(
                 id=destination_id,
                 ordinal=len(states),
-                path=item.path + [asdict(action)],
+                path=states[actual_source_id].path + [asdict(action)],
                 hierarchy=f"hierarchies/state-{capture_ordinal:03}.xml",
                 screenshot=str(saved_screenshot.relative_to(output)),
                 actions_found=len(destination_actions),
@@ -929,10 +982,12 @@ def main() -> int:
         current_state_id = destination_id
         current_hierarchy = destination_hierarchy
         transition = {
-            "source": item.source_id,
+            "source": actual_source_id,
             "destination": destination_id,
             "action": asdict(action),
-            "result": "changed" if destination_id != item.source_id else "no_change",
+            "result": "changed"
+            if destination_id != actual_source_id
+            else "no_change",
             "latency_ms": latency_ms,
             "navigation_mode": "live_session" if reused_session else "replay",
             "screen": {
@@ -946,13 +1001,13 @@ def main() -> int:
         transitions.append(transition)
         issues.extend(
             transition_issues(
-                item.source_id,
+                actual_source_id,
                 destination_id,
                 transition["action"],
                 latency_ms,
                 states[destination_id].screenshot,
-                states[item.source_id].screen_name,
-                item.path + [asdict(action)],
+                states[actual_source_id].screen_name,
+                states[actual_source_id].path + [asdict(action)],
                 observable_effects,
             )
         )
@@ -960,6 +1015,7 @@ def main() -> int:
             "states": [asdict(state) for state in states.values()],
             "transitions": transitions,
             "frontier": [asdict(entry) for entry in frontier],
+            "tested_semantic_actions": sorted(tested_semantic_actions),
         }
         (output / "checkpoint.json").write_text(
             json.dumps(checkpoint, indent=2), encoding="utf-8"

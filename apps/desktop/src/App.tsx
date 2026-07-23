@@ -68,6 +68,10 @@ export function parseScanMetrics(
   };
 }
 
+export function appendUniqueScanLog(current: string[], next: string): string[] {
+  return current.at(-1) === next ? current : [...current.slice(-99), next];
+}
+
 export function App() {
   const [step, setStep] = useState<"device" | "application" | "live">("device");
   const [devices, setDevices] = useState<AndroidDevice[]>([]);
@@ -169,7 +173,7 @@ export function App() {
     setScanOutput(undefined);
     setError(undefined);
     const stopProgress = await listen<string>("scan-progress", (event) => {
-      setScanLogs((current) => [...current.slice(-99), event.payload]);
+      setScanLogs((current) => appendUniqueScanLog(current, event.payload));
     });
     const stopCompleted = await listen<string>("scan-completed", (event) => {
       setScanOutput(event.payload);

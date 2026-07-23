@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendUniqueScanLog,
   nextStepForDevice,
   parseScanMetrics,
   platformLabel,
@@ -70,5 +71,19 @@ describe("live scan metrics", () => {
     expect(
       parseScanMetrics(["states=6 transitions=5 frontier=54"], summary),
     ).toEqual({ states: 8, transitions: 7, frontier: 13 });
+  });
+});
+
+describe("live scan console", () => {
+  it("ignores identical consecutive progress events", () => {
+    const current = ["states=2 transitions=1 frontier=28"];
+    expect(appendUniqueScanLog(current, current[0])).toBe(current);
+  });
+
+  it("keeps a new progress event", () => {
+    expect(appendUniqueScanLog(["states=2"], "states=3")).toEqual([
+      "states=2",
+      "states=3",
+    ]);
   });
 });

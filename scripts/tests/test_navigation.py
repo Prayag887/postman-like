@@ -6,6 +6,7 @@ from autonomous_scan import (
     RepresentativeSampler,
     StateRecord,
     is_immediate_loop,
+    semantic_action_key,
     state_issues,
     transition_issues,
     write_outputs,
@@ -44,6 +45,48 @@ class NavigationTests(unittest.TestCase):
             risk="safe",
         )
         self.assertTrue(is_immediate_loop([previous], moved_control))
+
+    def test_dynamic_states_share_one_semantic_tab_identity(self):
+        all_tab = Action(
+            index=0,
+            label="All",
+            class_name="android.view.View",
+            bounds="[18,177][114,273]",
+            x=66,
+            y=225,
+            risk="safe",
+        )
+        first = semantic_action_key("Live class|All", all_tab, None)
+        moved = Action(
+            index=0,
+            label="All",
+            class_name="android.view.View",
+            bounds="[20,180][116,276]",
+            x=68,
+            y=228,
+            risk="safe",
+        )
+        self.assertEqual(
+            first, semantic_action_key("Live class|All", moved, None)
+        )
+
+    def test_collection_representatives_are_not_collapsed_as_tabs(self):
+        details = Action(
+            index=4,
+            label="View Details",
+            class_name="android.view.View",
+            bounds="[64,644][352,740]",
+            x=208,
+            y=692,
+            risk="safe",
+        )
+        classification = {
+            "collection": "Live class cards",
+            "variant": "Upcoming",
+        }
+        self.assertIsNone(
+            semantic_action_key("Live class", details, classification)
+        )
 
     def test_different_action_can_continue_the_flow(self):
         previous = {

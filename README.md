@@ -14,6 +14,7 @@ App Tester is an open-source, local-first desktop application for autonomous And
 - A small JSON CLI for diagnostics and automation.
 - Safety-gated local-model exploration using Qwen3-0.6B, with versioned state and transition evidence.
 - Session-aware depth-first navigation that stays in the current flow and replays only for branch restoration or recovery.
+- A semantic action ledger that prevents tabs and ordinary controls from being re-tested when timers or list content create a new state fingerprint.
 - Local-model discovery and representative sampling of repeated collection variants without user configuration or a fixed status taxonomy.
 - Local semantic screen summaries and flow-stage classification.
 - Redacted API/DTO parsing and Android StrictMode incident capture from target-process logcat.
@@ -105,6 +106,8 @@ Target-process logcat is correlated with the action and screen active at the tim
 The scan directory contains `checkpoint.json`, `graph.json`, `graph.mmd`, `transitions/transitions.jsonl`, `model-decisions.jsonl`, `issues.jsonl`, `coverage.json`, `sampling.json`, screenshots, UI hierarchies, and per-transition runtime logs. `agent_report.md` is added only when issues exist.
 
 Repeated collections are sampled by semantic variant discovered from the visible card context while navigating. The local model assigns stable collection and variant labels from badges, status text, capabilities, and content shape; users do not configure names such as completed or upcoming. The scanner tests one representative per discovered variant and action role and records equivalent skipped actions in `sampling.json`. Controls are considered effective when the scanner observes a UI hierarchy change, foreground activity change, network request, external navigation, or runtime incident.
+
+For non-collection controls, tested identity is based on feature scope, semantic screen name, control role, and label rather than the raw state hash or bounds. A queued action may be retargeted to the current equivalent semantic screen, avoiding a replay to an obsolete timer/list snapshot.
 
 `agent_report.md` is created only when at least one issue exists. It contains issue packets—not general scan inventory—with the symptom, likely causes, reproduction path, evidence, and developer next steps. Issue-free runs have no `agent_report.md`; their non-issue coverage data remains in the machine-readable scan artifacts.
 
