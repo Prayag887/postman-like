@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
 import time
+import xml.etree.ElementTree as ET
 from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -17,11 +19,10 @@ from typing import Any
 from local_model_scan import (
     Action,
     capture,
-    choose_action,
     discover_actions,
+    fast_understand_screen,
     fingerprint,
-    load_model,
-    understand_screen,
+    save_observation,
 )
 from runtime_diagnostics import LogcatCollector
 
@@ -41,6 +42,7 @@ class StateRecord:
     semantic_confidence: int
     semantic_evidence: list[str]
     semantic_action_variants: list[dict[str, Any]]
+    semantic_preferred_action_index: int
 
 
 @dataclass
@@ -49,6 +51,7 @@ class FrontierItem:
     path: list[dict[str, Any]]
     action: dict[str, Any]
     semantic_key: str | None = None
+    restore_attempts: int = 0
 
 
 @dataclass
@@ -104,6 +107,86 @@ def wait_for_stability(serial: str, binary: str, timeout: float = 5.0) -> str:
             previous = current
         time.sleep(0.2)
     return latest or dump_hierarchy(serial, binary)
+
+
+LOADING_SIGNAL = re.compile(
+    r'(?:class="[^"]*(?:ProgressBar|RefreshProgressIndicator)"|'
+    r'(?:text|content-desc)="[^"]*\b(?:loading|please wait)\b)',
+    re.IGNORECASE,
+)
+
+
+def observe_after_action(
+    serial: str, binary: str, timeout: float = 3.0
+) -> str:
+    time.sleep(0.35)
+    hierarchy = dump_hierarchy(serial, binary)
+    if not LOADING_SIGNAL.search(hierarchy):
+        return hierarchy
+    deadline = time.monotonic() + timeout
+    previous = fingerprint(hierarchy)
+    while time.monotonic() < deadline:
+        time.sleep(0.35)
+        hierarchy = dump_hierarchy(serial, binary)
+        current = fingerprint(hierarchy)
+        if not LOADING_SIGNAL.search(hierarchy) or current == previous:
+            return hierarchy
+        previous = current
+    return hierarchy
+
+
+def screen_schema_key(actions: list[Action]) -> str:
+    schema = sorted(
+        (
+            action.class_name,
+            re.sub(r"\d+", "<n>", action.label.casefold()),
+        )
+        for action in actions
+        if action.class_name != "__scroll__"
+    )
+    return hashlib.sha256(
+        json.dumps(schema, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def semantic_state_id(hierarchy: str, actions: list[Action]) -> str:
+    root = ET.fromstring(hierarchy)
+    controls: list[tuple[str, str]] = []
+    for node in root.iter("node"):
+        if (
+            node.attrib.get("clickable") != "true"
+            or node.attrib.get("enabled") != "true"
+        ):
+            continue
+        labels: list[str] = []
+        for descendant in node.iter():
+            for attribute in ("text", "content-desc"):
+                value = descendant.attrib.get(attribute, "").strip()
+                if value and value not in labels:
+                    labels.append(value)
+        label = " ".join(labels[:3]) or node.attrib.get(
+            "resource-id", ""
+        ).rsplit("/", 1)[-1]
+        controls.append(
+            (
+                node.attrib.get("class", ""),
+                re.sub(r"\d+", "<n>", label.casefold()),
+            )
+        )
+    visible = [
+        re.sub(r"\d+", "<n>", value.strip().casefold())
+        for value in re.findall(
+            r'\b(?:text|content-desc)="([^"]+)"', hierarchy
+        )
+        if value.strip()
+    ][:3]
+    payload = {
+        "controls": sorted(controls),
+        "anchors": visible,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def action_key(action: Action | dict[str, Any]) -> tuple[str, str, str]:
@@ -198,10 +281,14 @@ class RepresentativeSampler:
 def best_match(actions: list[Action], selector: dict[str, Any]) -> Action | None:
     key = action_key(selector)
     for action in actions:
-        if action_key(action) == key:
+        if not action.selected and action_key(action) == key:
             return action
     label = str(selector.get("label", "")).casefold()
-    same_label = [action for action in actions if action.label.casefold() == label]
+    same_label = [
+        action
+        for action in actions
+        if not action.selected and action.label.casefold() == label
+    ]
     return same_label[0] if len(same_label) == 1 else None
 
 
@@ -277,8 +364,12 @@ def navigate_in_session(
     binary: str,
     current_path: list[dict[str, Any]],
     target_path: list[dict[str, Any]],
+    target_state_id: str,
     hierarchy: str,
 ) -> tuple[bool, str]:
+    actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
+    if semantic_state_id(hierarchy, actions) == target_state_id:
+        return True, hierarchy
     common = 0
     for current, target in zip(current_path, target_path):
         if action_key(current) != action_key(target):
@@ -295,9 +386,12 @@ def navigate_in_session(
         if not back_actions:
             return False, hierarchy
         perform_action(serial, binary, back_actions[0])
-        hierarchy = wait_for_stability(serial, binary)
+        hierarchy = observe_after_action(serial, binary)
         if foreground_package(serial, binary) != package:
             return False, hierarchy
+        actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
+        if semantic_state_id(hierarchy, actions) == target_state_id:
+            return True, hierarchy
     for selector in target_path[common:]:
         actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
         action = best_match(actions, selector)
@@ -585,6 +679,7 @@ def write_outputs(
     model_decisions: list[dict[str, Any]],
     frontier_remaining: int,
     sampling: list[dict[str, Any]],
+    skipped_branches: list[dict[str, Any]],
 ) -> None:
     issue_list = [
         make_actionable(issue, states) for issue in deduplicate_issues(issues)
@@ -620,10 +715,14 @@ def write_outputs(
         "states_discovered": len(states),
         "actions_executed": len(transitions),
         "frontier_remaining": frontier_remaining,
-        "complete": frontier_remaining == 0,
+        "skipped_branches": len(skipped_branches),
+        "complete": frontier_remaining == 0 and not skipped_branches,
     }
     (output / "coverage.json").write_text(
         json.dumps(coverage, indent=2), encoding="utf-8"
+    )
+    (output / "skipped-branches.json").write_text(
+        json.dumps(skipped_branches, indent=2), encoding="utf-8"
     )
     sampling_summary = {
         "representatives_tested": len(sampling),
@@ -715,7 +814,7 @@ def main() -> int:
         "started_at": datetime.now(timezone.utc).isoformat(),
         "serial": args.serial,
         "package": args.package,
-        "model": "Qwen/Qwen3-0.6B",
+        "model": "fast-local-semantics",
         "mode": "safe",
         "limits": {
             "max_states": args.max_states,
@@ -727,19 +826,19 @@ def main() -> int:
         json.dumps(metadata, indent=2), encoding="utf-8"
     )
 
-    tokenizer, model, device = load_model()
-    metadata["model_device"] = device
+    metadata["model_device"] = "cpu"
     if foreground_package(args.serial, args.adb) != args.package:
         raise RuntimeError(
             f"{args.package} must already be open in the foreground before scanning"
         )
     wait_for_stability(args.serial, args.adb)
     hierarchy, screenshot = capture(args.serial, output, 0, args.adb)
-    root_id = fingerprint(hierarchy)
     root_actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
-    root_semantics = understand_screen(
-        tokenizer, model, device, hierarchy, root_actions
-    )
+    root_id = semantic_state_id(hierarchy, root_actions)
+    root_semantics = fast_understand_screen(hierarchy, root_actions)
+    semantic_cache: dict[str, dict[str, Any]] = {
+        screen_schema_key(root_actions): root_semantics
+    }
     states: dict[str, StateRecord] = {
         root_id: StateRecord(
             id=root_id,
@@ -755,6 +854,9 @@ def main() -> int:
             semantic_confidence=int(root_semantics["confidence"]),
             semantic_evidence=list(root_semantics["evidence_anchors"]),
             semantic_action_variants=list(root_semantics["action_variants"]),
+            semantic_preferred_action_index=int(
+                root_semantics["preferred_action_index"]
+            ),
         )
     }
     issues = state_issues(root_id, hierarchy, root_actions, str(screenshot.relative_to(output)))
@@ -768,8 +870,29 @@ def main() -> int:
     def enqueue(
         state: StateRecord, actions: list[Action], *, prioritize: bool = False
     ) -> None:
-        executed: set[tuple[str, str]] = set()
-        preferred, decision = choose_action(tokenizer, model, device, actions, executed)
+        preferred_index = state.semantic_preferred_action_index
+        preferred = (
+            actions[preferred_index]
+            if 0 <= preferred_index < len(actions)
+            and not actions[preferred_index].selected
+            and actions[preferred_index].risk == "safe"
+            else next(
+                (
+                    action
+                    for action in actions
+                    if not action.selected and action.risk == "safe"
+                ),
+                None,
+            )
+        )
+        decision = {
+            "reason": (
+                "Used the screen-understanding model's preferred action."
+                if preferred_index >= 0
+                else "Used deterministic first-safe fallback."
+            ),
+            "screen_understanding_reused": True,
+        }
         model_decisions.append(
             {
                 "state_id": state.id,
@@ -792,6 +915,8 @@ def main() -> int:
         }
         for action in ordered:
             if action.risk != "safe" or RISKY_WORDS.search(action.label):
+                continue
+            if action.selected:
                 continue
             if is_immediate_loop(state.path, action):
                 continue
@@ -831,7 +956,11 @@ def main() -> int:
     enqueue(states[root_id], root_actions)
     transitions: list[dict[str, Any]] = []
     collector = LogcatCollector(args.serial, args.adb, args.package)
-    deadline = time.monotonic() + args.max_minutes * 60
+    deadline = (
+        time.monotonic() + args.max_minutes * 60
+        if args.max_minutes > 0
+        else float("inf")
+    )
     capture_ordinal = 1
     current_state_id = root_id
     current_hierarchy = hierarchy
@@ -842,8 +971,11 @@ def main() -> int:
 
     while (
         frontier
-        and len(states) < args.max_states
-        and len(transitions) < args.max_actions
+        and (args.max_states <= 0 or len(states) < args.max_states)
+        and (
+            args.max_actions <= 0
+            or len(transitions) < args.max_actions
+        )
         and time.monotonic() < deadline
     ):
         item = pop_fair_frontier(
@@ -878,18 +1010,26 @@ def main() -> int:
                 args.adb,
                 current_path,
                 item.path,
+                item.source_id,
                 current_hierarchy,
             )
             if not restored:
-                skipped_branches.append(
-                    {
-                        "source": item.source_id,
-                        "action": item.action,
-                        "reason": "no visible in-app path to queued branch",
-                    }
-                )
-                if item.semantic_key:
-                    queued_semantic_actions.discard(item.semantic_key)
+                if item.restore_attempts < 2:
+                    item.restore_attempts += 1
+                    frontier.append(item)
+                else:
+                    skipped_branches.append(
+                        {
+                            "source": item.source_id,
+                            "action": item.action,
+                            "reason": (
+                                "no visible in-app path after three "
+                                "session states"
+                            ),
+                        }
+                    )
+                    if item.semantic_key:
+                        queued_semantic_actions.discard(item.semantic_key)
                 current_state_id = ""
                 continue
             current_state_id = item.source_id
@@ -915,12 +1055,14 @@ def main() -> int:
         perform_action(args.serial, args.adb, action)
         if item.semantic_key:
             tested_semantic_actions.add(item.semantic_key)
-        time.sleep(0.25)
         try:
-            intermediate_hierarchy = dump_hierarchy(args.serial, args.adb)
+            destination_hierarchy = observe_after_action(
+                args.serial, args.adb
+            )
         except subprocess.CalledProcessError:
-            intermediate_hierarchy = source_hierarchy
-        destination_hierarchy = wait_for_stability(args.serial, args.adb)
+            destination_hierarchy = wait_for_stability(
+                args.serial, args.adb, timeout=3.0
+            )
         latency_ms = round((time.monotonic() - started) * 1000)
         raw_logs, runtime_issues = collector.collect(
             state_id=actual_source_id,
@@ -946,11 +1088,14 @@ def main() -> int:
             )
             current_state_id = ""
             continue
-        destination_id = fingerprint(destination_hierarchy)
+        destination_actions = with_scroll_actions(
+            discover_actions(destination_hierarchy), destination_hierarchy
+        )
+        destination_id = semantic_state_id(
+            destination_hierarchy, destination_actions
+        )
         observable_effects: list[str] = []
-        if fingerprint(intermediate_hierarchy) != source_fingerprint:
-            observable_effects.append("intermediate_ui_changed")
-        if destination_id != source_fingerprint:
+        if fingerprint(destination_hierarchy) != source_fingerprint:
             observable_effects.append("stable_ui_changed")
         if component_after != component_before:
             observable_effects.append("foreground_activity_changed")
@@ -959,16 +1104,28 @@ def main() -> int:
         if runtime_issues:
             observable_effects.append("runtime_incident_observed")
         if destination_id not in states:
-            saved_hierarchy, saved_screenshot = capture(
-                args.serial, output, capture_ordinal, args.adb
+            # Avoid another UIAutomator dump: capture only persisted evidence
+            # from the already-observed hierarchy plus a screenshot.
+            saved_hierarchy, saved_screenshot = save_observation(
+                args.serial,
+                output,
+                capture_ordinal,
+                args.adb,
+                destination_hierarchy,
             )
-            destination_id = fingerprint(saved_hierarchy)
             destination_actions = with_scroll_actions(
                 discover_actions(saved_hierarchy), saved_hierarchy
             )
-            semantics = understand_screen(
-                tokenizer, model, device, saved_hierarchy, destination_actions
+            destination_id = semantic_state_id(
+                saved_hierarchy, destination_actions
             )
+            schema_key = screen_schema_key(destination_actions)
+            semantics = semantic_cache.get(schema_key)
+            if semantics is None:
+                semantics = fast_understand_screen(
+                    saved_hierarchy, destination_actions
+                )
+                semantic_cache[schema_key] = semantics
             state = StateRecord(
                 id=destination_id,
                 ordinal=len(states),
@@ -986,6 +1143,9 @@ def main() -> int:
                 semantic_confidence=int(semantics["confidence"]),
                 semantic_evidence=list(semantics["evidence_anchors"]),
                 semantic_action_variants=list(semantics["action_variants"]),
+                semantic_preferred_action_index=int(
+                    semantics["preferred_action_index"]
+                ),
             )
             states[destination_id] = state
             issues.extend(
@@ -1065,6 +1225,7 @@ def main() -> int:
         model_decisions,
         len(frontier),
         sampler.records(),
+        skipped_branches,
     )
     print(f"Scan recorded at {output.resolve()}")
     return 0

@@ -15,6 +15,8 @@ struct ScanSummary {
     issues: usize,
     #[serde(default)]
     equivalent_actions_skipped: usize,
+    #[serde(default)]
+    skipped_branches: usize,
 }
 
 #[tauri::command]
@@ -85,11 +87,11 @@ async fn run_autonomous_scan(
             .args(["--serial", &serial, "--package", &package_name])
             .args([
                 "--max-states",
-                "30",
+                "0",
                 "--max-actions",
-                "100",
+                "0",
                 "--max-minutes",
-                "15",
+                "120",
             ])
             .arg("--adb")
             .arg(adb.path())

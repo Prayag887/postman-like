@@ -28,4 +28,5 @@ export interface ScanSummary {
   complete: boolean;
   issues: number;
   equivalent_actions_skipped: number;
+  skipped_branches: number;
 }

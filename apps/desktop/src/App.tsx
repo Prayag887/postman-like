@@ -488,8 +488,8 @@ export function App() {
                     : "Ready to explore"}
               </h1>
               <p className="subtitle">
-                Qwen3-0.6B ranks deterministic safe actions. Exploration stays
-                in the open application session and never relaunches it.
+                Fast local semantics rank safe actions without blocking each
+                tap. Exploration stays in the open application session.
               </p>
             </div>
             <button
@@ -558,7 +558,8 @@ export function App() {
                 {scanSummary.issues} issues recorded.{" "}
                 {scanSummary.frontier_remaining} frontier actions remain.{" "}
                 {scanSummary.equivalent_actions_skipped} equivalent repeated
-                actions were skipped.
+                actions were skipped. {scanSummary.skipped_branches} unreachable
+                branches remain.
               </p>
               {scanOutput && scanSummary.issues > 0 && (
                 <code>{scanOutput}/agent_report.md</code>

@@ -52,6 +52,7 @@ class Action:
     y: int
     risk: str
     context: str = ""
+    selected: bool = False
 
 
 def adb(serial: str, *args: str, binary: str = "adb", text: bool = True) -> Any:
@@ -83,6 +84,18 @@ def capture(serial: str, directory: Path, step: int, adb_binary: str) -> tuple[s
         if last_error:
             raise last_error
         raise RuntimeError("UI hierarchy capture returned no content")
+    return save_observation(
+        serial, directory, step, adb_binary, hierarchy
+    )
+
+
+def save_observation(
+    serial: str,
+    directory: Path,
+    step: int,
+    adb_binary: str,
+    hierarchy: str,
+) -> tuple[str, Path]:
     hierarchy_path = directory / "hierarchies" / f"state-{step:03}.xml"
     hierarchy_path.write_text(hierarchy, encoding="utf-8")
     screenshot_path = directory / "screenshots" / f"state-{step:03}.png"
@@ -121,8 +134,6 @@ def discover_actions(hierarchy: str) -> list[Action]:
     for node in root.iter("node"):
         if node.attrib.get("clickable") != "true" or node.attrib.get("enabled") != "true":
             continue
-        if node.attrib.get("selected") == "true":
-            continue
         bounds = node.attrib.get("bounds", "")
         match = BOUNDS.fullmatch(bounds)
         if not match:
@@ -157,6 +168,7 @@ def discover_actions(hierarchy: str) -> list[Action]:
                 y=(y1 + y2) // 2,
                 risk=risk,
                 context=context[:500],
+                selected=node.attrib.get("selected") == "true",
             )
         )
     return actions
@@ -227,6 +239,53 @@ def infer_contextual_action_variants(actions: list[Action]) -> list[dict[str, An
     return inferred
 
 
+def fast_understand_screen(
+    hierarchy: str, actions: list[Action]
+) -> dict[str, Any]:
+    root = ET.fromstring(hierarchy)
+    visible: list[str] = []
+    classes: set[str] = set()
+    for node in root.iter("node"):
+        classes.add(node.attrib.get("class", ""))
+        for key in ("text", "content-desc"):
+            value = node.attrib.get(key, "").strip()
+            if value and value not in visible:
+                visible.append(value[:160])
+    screen_name = visible[0] if visible else "Unknown screen"
+    combined = " ".join(visible).casefold()
+    if any("edittext" in value.casefold() for value in classes):
+        flow_stage = "form"
+    elif "setting" in combined:
+        flow_stage = "settings"
+    elif re.search(r"\b(error|failed|try again)\b", combined):
+        flow_stage = "error"
+    elif actions:
+        flow_stage = "browse"
+    else:
+        flow_stage = "unknown"
+    safe_actions = [
+        action
+        for action in actions
+        if action.risk == "safe" and not action.selected
+    ]
+    preferred = safe_actions[0].index if safe_actions else -1
+    action_names = ", ".join(action.label for action in safe_actions[:4])
+    return {
+        "screen_name": screen_name[:80],
+        "purpose": (
+            f"Explore visible content using {action_names}."
+            if action_names
+            else "Present the visible application state."
+        ),
+        "flow_stage": flow_stage,
+        "confidence": 70 if visible else 0,
+        "evidence_anchors": visible[:8],
+        "action_variants": infer_contextual_action_variants(actions[:24]),
+        "preferred_action_index": preferred,
+        "engine": "fast_local_semantics",
+    }
+
+
 def load_model() -> tuple[Any, Any, str]:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -295,6 +354,9 @@ def understand_screen(
                 "different). Infer variants from evidence such as badges, status, "
                 "capabilities, or content shape; do not use a predefined taxonomy. "
                 "Omit ordinary navigation and actions without collection context. "
+                "Also return preferred_action_index for the safest useful "
+                "read-only navigation action on this screen, or -1 when none "
+                "exists. "
                 "Do not invent app behavior."
             ),
         },
@@ -396,6 +458,17 @@ def understand_screen(
             for variant in validated_variants
             if variant["action_index"] not in inferred_indices
         ]
+        try:
+            preferred_index = int(result.get("preferred_action_index", -1))
+        except (TypeError, ValueError):
+            preferred_index = -1
+        result["preferred_action_index"] = (
+            preferred_index
+            if 0 <= preferred_index < min(len(actions), 24)
+            and not actions[preferred_index].selected
+            and actions[preferred_index].risk == "safe"
+            else -1
+        )
         result["raw_response"] = response
         return result
     except (ValueError, TypeError, json.JSONDecodeError) as error:
@@ -407,6 +480,7 @@ def understand_screen(
             "confidence": 0,
             "evidence_anchors": visible[:8],
             "action_variants": infer_contextual_action_variants(actions[:24]),
+            "preferred_action_index": -1,
             "validation_error": str(error),
             "raw_response": response,
         }
@@ -424,7 +498,9 @@ def choose_action(
     eligible = [
         action
         for action in actions
-        if action.risk == "safe" and (action.label.casefold(), action.bounds) not in executed
+        if action.risk == "safe"
+        and not action.selected
+        and (action.label.casefold(), action.bounds) not in executed
     ]
     if not eligible:
         return None, {"action_index": -1, "reason": "No untested safe action remains."}

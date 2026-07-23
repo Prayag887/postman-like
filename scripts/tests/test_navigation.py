@@ -10,6 +10,7 @@ from autonomous_scan import (
     is_immediate_loop,
     pop_fair_frontier,
     semantic_action_key,
+    semantic_state_id,
     state_issues,
     transition_issues,
     write_outputs,
@@ -30,7 +31,10 @@ class NavigationTests(unittest.TestCase):
   <node text="Today" class="android.widget.Button" clickable="true"
         enabled="true" selected="false" bounds="[100,0][200,100]" />
 </hierarchy>"""
-        self.assertEqual([action.label for action in discover_actions(hierarchy)], ["Today"])
+        actions = discover_actions(hierarchy)
+        self.assertEqual([action.label for action in actions], ["All", "Today"])
+        self.assertTrue(actions[0].selected)
+        self.assertFalse(actions[1].selected)
 
     def test_same_semantic_action_is_not_repeated_immediately(self):
         previous = {
@@ -71,6 +75,32 @@ class NavigationTests(unittest.TestCase):
         )
         self.assertEqual(
             first, semantic_action_key("Live class|All", moved, None)
+        )
+
+    def test_selected_tab_and_countdown_do_not_create_new_semantic_state(self):
+        first = """<?xml version="1.0"?>
+<hierarchy>
+  <node text="All" class="android.view.View" clickable="true"
+        enabled="true" selected="true" bounds="[0,0][100,100]" />
+  <node text="Today" class="android.view.View" clickable="true"
+        enabled="true" selected="false" bounds="[100,0][200,100]" />
+  <node text="Starts in 12:34" class="android.widget.TextView"
+        clickable="false" enabled="true" bounds="[0,100][200,200]" />
+</hierarchy>"""
+        second = first.replace(
+            'text="All" class="android.view.View" clickable="true"\n'
+            '        enabled="true" selected="true"',
+            'text="All" class="android.view.View" clickable="true"\n'
+            '        enabled="true" selected="false"',
+        ).replace(
+            'text="Today" class="android.view.View" clickable="true"\n'
+            '        enabled="true" selected="false"',
+            'text="Today" class="android.view.View" clickable="true"\n'
+            '        enabled="true" selected="true"',
+        ).replace("Starts in 12:34", "Starts in 12:21")
+        self.assertEqual(
+            semantic_state_id(first, discover_actions(first)),
+            semantic_state_id(second, discover_actions(second)),
         )
 
     def test_collection_representatives_are_not_collapsed_as_tabs(self):
@@ -223,6 +253,7 @@ class NavigationTests(unittest.TestCase):
             semantic_confidence=90,
             semantic_evidence=["Home"],
             semantic_action_variants=[],
+            semantic_preferred_action_index=-1,
         )
         metadata = {
             "package": "com.example",
@@ -232,7 +263,9 @@ class NavigationTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             output = Path(directory)
             (output / "transitions").mkdir()
-            write_outputs(output, metadata, {"state": state}, [], [], [], 0, [])
+            write_outputs(
+                output, metadata, {"state": state}, [], [], [], 0, [], []
+            )
             self.assertFalse((output / "agent_report.md").exists())
             issue = {
                 "category": "navigation",
@@ -243,7 +276,15 @@ class NavigationTests(unittest.TestCase):
                 "evidence": {"action": {"label": "Open"}},
             }
             write_outputs(
-                output, metadata, {"state": state}, [], [issue], [], 0, []
+                output,
+                metadata,
+                {"state": state},
+                [],
+                [issue],
+                [],
+                0,
+                [],
+                [],
             )
             report = (output / "agent_report.md").read_text()
             self.assertIn("What happened", report)
@@ -276,6 +317,7 @@ class NavigationTests(unittest.TestCase):
                 semantic_confidence=90,
                 semantic_evidence=[],
                 semantic_action_variants=[],
+                semantic_preferred_action_index=-1,
             )
 
         states = {
