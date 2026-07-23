@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AndroidApp, AndroidDevice } from "./types";
+import type { AndroidApp, AndroidDevice, ScanSummary } from "./types";
 
 export async function discoverDevices(): Promise<AndroidDevice[]> {
   if (!("__TAURI_INTERNALS__" in window)) {
@@ -24,4 +24,11 @@ export async function launchInstalledApp(
   packageName: string,
 ): Promise<void> {
   return invoke("launch_installed_app", { serial, packageName });
+}
+
+export async function runAutonomousScan(
+  serial: string,
+  packageName: string,
+): Promise<ScanSummary> {
+  return invoke("run_autonomous_scan", { serial, packageName });
 }

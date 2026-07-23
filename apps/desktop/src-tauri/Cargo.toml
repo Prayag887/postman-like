@@ -14,4 +14,5 @@ tauri-build = { version = "2.5.6", features = [] }
 [dependencies]
 androidqa-core = { path = "../../../crates/apiqa-core" }
 serde.workspace = true
+serde_json.workspace = true
 tauri = { version = "2.11.5", features = [] }

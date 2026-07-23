@@ -80,9 +80,7 @@ python3 scripts/local_model_scan.py \
   --steps 4
 ```
 
-The scanner captures screenshots and UI hierarchies, fingerprints states, discovers clickable actions, blocks deterministic high-risk language, asks the local model only to rank remaining safe actions, validates its JSON response, and records every transition under `scan-results/`. Scan results are ignored by Git because they can contain private application data.
-
-This is currently a developer-facing vertical slice. Live progress and scan controls are not yet connected to the desktop Live Scan screen.
+The scanner captures screenshots and UI hierarchies, fingerprints states, discovers clickable actions, blocks deterministic high-risk language, asks the local model only to rank remaining safe actions, validates its JSON response, and records every transition under `scan-results/`. Scan results are ignored by Git because they can contain private application data. After launching a selected application, the desktop Live Scan screen can start this local worker and stream its progress.
 
 For graph-based exploration with replay, scrolling, checkpoint persistence, deterministic issue analysis, and an agent report:
 
@@ -102,7 +100,7 @@ Limits are explicit. A run that stops with frontier entries remaining reports `c
 ## Roadmap (not yet implemented)
 
 - Secure Android 11+ wireless QR pairing and pairing-code fallback.
-- Application/APK selection, launch, and manual login handoff.
+- APK file installation and manual login handoff guidance.
 - Multi-pass exploration, reverse transitions, and resume-from-checkpoint beyond the current replay/checkpoint slice.
 - UI hierarchy capture, screenshots, scrolling, replay, and recovery.
 - Deterministic crash, ANR, navigation, loading, layout, accessibility, and form analyzers.

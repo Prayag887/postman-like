@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   ArrowLeft,
   AppWindow,
@@ -12,8 +13,18 @@ import {
   Sun,
   Wifi,
 } from "lucide-react";
-import { discoverDevices, launchInstalledApp, listInstalledApps } from "./api";
-import type { AndroidApp, AndroidDevice, ConnectionType } from "./types";
+import {
+  discoverDevices,
+  launchInstalledApp,
+  listInstalledApps,
+  runAutonomousScan,
+} from "./api";
+import type {
+  AndroidApp,
+  AndroidDevice,
+  ConnectionType,
+  ScanSummary,
+} from "./types";
 
 const connectionIcon: Record<ConnectionType, typeof Cable> = {
   usb: Cable,
@@ -44,8 +55,21 @@ export function nextStepForDevice(
   return selectedSerial ? "application" : "device";
 }
 
+export function parseScanMetrics(
+  logs: string[],
+  summary?: ScanSummary,
+): { states: number; transitions: number; frontier: number } {
+  const latest = [...logs].reverse().find((line) => line.startsWith("states="));
+  const match = latest?.match(/states=(\d+) transitions=(\d+) frontier=(\d+)/);
+  return {
+    states: summary?.states_discovered ?? Number(match?.[1] ?? 0),
+    transitions: summary?.actions_executed ?? Number(match?.[2] ?? 0),
+    frontier: summary?.frontier_remaining ?? Number(match?.[3] ?? 0),
+  };
+}
+
 export function App() {
-  const [step, setStep] = useState<"device" | "application">("device");
+  const [step, setStep] = useState<"device" | "application" | "live">("device");
   const [devices, setDevices] = useState<AndroidDevice[]>([]);
   const [selected, setSelected] = useState<string>();
   const [loading, setLoading] = useState(true);
@@ -55,6 +79,11 @@ export function App() {
   const [appSearch, setAppSearch] = useState("");
   const [appsLoading, setAppsLoading] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [appLaunched, setAppLaunched] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanLogs, setScanLogs] = useState<string[]>([]);
+  const [scanSummary, setScanSummary] = useState<ScanSummary>();
+  const [scanOutput, setScanOutput] = useState<string>();
   const [theme, setTheme] = useState<Theme>(() =>
     resolveInitialTheme(
       localStorage.getItem("app-tester-theme"),
@@ -123,12 +152,43 @@ export function App() {
     setError(undefined);
     try {
       await launchInstalledApp(selected, selectedApp);
+      setAppLaunched(true);
     } catch (reason) {
       setError(String(reason));
     } finally {
       setLaunching(false);
     }
   }
+
+  async function startSafeScan() {
+    if (!selected || !selectedApp) return;
+    setStep("live");
+    setScanning(true);
+    setScanLogs([]);
+    setScanSummary(undefined);
+    setScanOutput(undefined);
+    setError(undefined);
+    const stopProgress = await listen<string>("scan-progress", (event) => {
+      setScanLogs((current) => [...current.slice(-99), event.payload]);
+    });
+    const stopCompleted = await listen<string>("scan-completed", (event) => {
+      setScanOutput(event.payload);
+    });
+    try {
+      setScanSummary(await runAutonomousScan(selected, selectedApp));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      stopProgress();
+      stopCompleted();
+      setScanning(false);
+    }
+  }
+
+  const liveMetrics = useMemo(
+    () => parseScanMetrics(scanLogs, scanSummary),
+    [scanLogs, scanSummary],
+  );
 
   return (
     <div className="app-shell">
@@ -172,7 +232,12 @@ export function App() {
           >
             <span>2</span> Application
           </button>
-          <button disabled>
+          <button
+            className={step === "live" ? "active" : ""}
+            aria-current={step === "live" ? "step" : undefined}
+            disabled={!appLaunched}
+            onClick={() => setStep("live")}
+          >
             <span>3</span> Live scan
           </button>
           <button disabled>
@@ -294,7 +359,7 @@ export function App() {
             </button>
           </footer>
         </main>
-      ) : (
+      ) : step === "application" ? (
         <main>
           <header>
             <div>
@@ -389,11 +454,117 @@ export function App() {
                 ? "Launch the app, complete login manually, then return here."
                 : "Select an application to continue."}
             </p>
+            <div className="footer-actions">
+              <button
+                className="secondary"
+                disabled={!selectedApp || launching}
+                onClick={() => void launchSelectedApplication()}
+              >
+                {launching ? "Launching…" : "Launch application"}
+              </button>
+              <button
+                disabled={!appLaunched}
+                onClick={() => void startSafeScan()}
+              >
+                Start safe scan
+              </button>
+            </div>
+          </footer>
+        </main>
+      ) : (
+        <main>
+          <header>
+            <div>
+              <p className="eyebrow">AUTONOMOUS QA · LIVE SCAN</p>
+              <h1>
+                {scanning
+                  ? "Exploring application"
+                  : scanSummary
+                    ? "Scan results"
+                    : "Ready to explore"}
+              </h1>
+              <p className="subtitle">
+                Qwen3-0.6B ranks deterministic safe actions. Every branch is
+                restored and replayed before execution.
+              </p>
+            </div>
             <button
-              disabled={!selectedApp || launching}
-              onClick={() => void launchSelectedApplication()}
+              className="secondary"
+              disabled={scanning}
+              onClick={() => setStep("application")}
             >
-              {launching ? "Launching…" : "Launch application"}
+              <ArrowLeft aria-hidden="true" />
+              Applications
+            </button>
+          </header>
+
+          <section className="metrics" aria-label="Scan metrics">
+            <div>
+              <strong>{liveMetrics.states}</strong>
+              <span>States</span>
+            </div>
+            <div>
+              <strong>{liveMetrics.transitions}</strong>
+              <span>Transitions</span>
+            </div>
+            <div>
+              <strong>{liveMetrics.frontier}</strong>
+              <span>Frontier</span>
+            </div>
+            <div>
+              <strong>{scanSummary?.issues ?? 0}</strong>
+              <span>Issues</span>
+            </div>
+          </section>
+
+          {error && (
+            <div className="error" role="alert">
+              <CircleHelp aria-hidden="true" />
+              <div>
+                <strong>Scan failed</strong>
+                <p>{error}</p>
+              </div>
+            </div>
+          )}
+
+          <section className="scan-console" aria-live="polite">
+            <div className="scan-console-title">
+              <span className={scanning ? "pulse-dot" : "complete-dot"} />
+              {scanning
+                ? "Local scanner running"
+                : scanSummary
+                  ? "Local scanner finished"
+                  : "Local scanner ready"}
+            </div>
+            <pre>
+              {scanLogs.length
+                ? scanLogs.join("\n")
+                : "Start a scan when the application is ready."}
+            </pre>
+          </section>
+
+          {scanSummary && (
+            <section className="scan-result">
+              <h2>
+                {scanSummary.complete
+                  ? "Safe frontier exhausted"
+                  : "Completed with configured limits"}
+              </h2>
+              <p>
+                {scanSummary.issues} issues recorded.{" "}
+                {scanSummary.frontier_remaining} frontier actions remain.
+              </p>
+              {scanOutput && <code>{scanOutput}/agent_report.md</code>}
+            </section>
+          )}
+
+          <footer>
+            <p>
+              Scan evidence stays local and may contain private application
+              content.
+            </p>
+            <button disabled={scanning} onClick={() => void startSafeScan()}>
+              {scanSummary ? "Run another scan" : "Start safe scan"}
             </button>
           </footer>
         </main>

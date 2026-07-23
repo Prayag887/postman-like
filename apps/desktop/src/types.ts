@@ -20,3 +20,11 @@ export interface AndroidApp {
   version_name?: string;
   version_code?: number;
 }
+
+export interface ScanSummary {
+  states_discovered: number;
+  actions_executed: number;
+  frontier_remaining: number;
+  complete: boolean;
+  issues: number;
+}

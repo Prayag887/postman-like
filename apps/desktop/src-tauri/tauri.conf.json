@@ -25,6 +25,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../../../scripts/autonomous_scan.py": "scripts/autonomous_scan.py",
+      "../../../scripts/local_model_scan.py": "scripts/local_model_scan.py",
+      "../../../scripts/requirements-local-model.txt": "scripts/requirements-local-model.txt"
+    },
     "category": "DeveloperTool",
     "shortDescription": "Local autonomous QA for Android applications",
     "longDescription": "Explore Android applications safely, record reproducible issues, and export agent-ready QA reports."
