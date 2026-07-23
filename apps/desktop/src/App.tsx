@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ArrowLeft,
+  AppWindow,
   Cable,
   CircleHelp,
   Moon,
   MonitorSmartphone,
   RefreshCw,
+  Search,
   Smartphone,
   Sun,
   Wifi,
 } from "lucide-react";
-import { discoverDevices } from "./api";
-import type { AndroidDevice, ConnectionType } from "./types";
+import { discoverDevices, launchInstalledApp, listInstalledApps } from "./api";
+import type { AndroidApp, AndroidDevice, ConnectionType } from "./types";
 
 const connectionIcon: Record<ConnectionType, typeof Cable> = {
   usb: Cable,
@@ -35,11 +38,23 @@ export function resolveInitialTheme(
   return prefersDark ? "dark" : "light";
 }
 
+export function nextStepForDevice(
+  selectedSerial: string | undefined,
+): "device" | "application" {
+  return selectedSerial ? "application" : "device";
+}
+
 export function App() {
+  const [step, setStep] = useState<"device" | "application">("device");
   const [devices, setDevices] = useState<AndroidDevice[]>([]);
   const [selected, setSelected] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
+  const [apps, setApps] = useState<AndroidApp[]>([]);
+  const [selectedApp, setSelectedApp] = useState<string>();
+  const [appSearch, setAppSearch] = useState("");
+  const [appsLoading, setAppsLoading] = useState(false);
+  const [launching, setLaunching] = useState(false);
   const [theme, setTheme] = useState<Theme>(() =>
     resolveInitialTheme(
       localStorage.getItem("app-tester-theme"),
@@ -62,9 +77,8 @@ export function App() {
       setSelected((current) =>
         next.some((device) => device.serial === current)
           ? current
-          : next.find(
-              (device) => device.authorization_status === "authorized",
-            )?.serial,
+          : next.find((device) => device.authorization_status === "authorized")
+              ?.serial,
       );
     } catch (reason) {
       setError(String(reason));
@@ -76,6 +90,45 @@ export function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const filteredApps = useMemo(() => {
+    const query = appSearch.trim().toLowerCase();
+    if (!query) return apps;
+    return apps.filter((app) => app.package_name.toLowerCase().includes(query));
+  }, [appSearch, apps]);
+
+  async function continueToApplications() {
+    if (!selected) return;
+    setStep(nextStepForDevice(selected));
+    setAppsLoading(true);
+    setError(undefined);
+    try {
+      const next = await listInstalledApps(selected);
+      setApps(next);
+      setSelectedApp((current) =>
+        next.some((app) => app.package_name === current)
+          ? current
+          : next[0]?.package_name,
+      );
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setAppsLoading(false);
+    }
+  }
+
+  async function launchSelectedApplication() {
+    if (!selected || !selectedApp) return;
+    setLaunching(true);
+    setError(undefined);
+    try {
+      await launchInstalledApp(selected, selectedApp);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setLaunching(false);
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -104,10 +157,19 @@ export function App() {
           </button>
         </div>
         <nav aria-label="Workflow">
-          <button className="active" aria-current="step">
+          <button
+            className={step === "device" ? "active" : ""}
+            aria-current={step === "device" ? "step" : undefined}
+            onClick={() => setStep("device")}
+          >
             <span>1</span> Device
           </button>
-          <button disabled>
+          <button
+            className={step === "application" ? "active" : ""}
+            aria-current={step === "application" ? "step" : undefined}
+            disabled={!selected}
+            onClick={() => void continueToApplications()}
+          >
             <span>2</span> Application
           </button>
           <button disabled>
@@ -117,111 +179,225 @@ export function App() {
             <span>4</span> Results
           </button>
         </nav>
-        <p className="privacy">Local-only. No telemetry. Your app data stays here.</p>
+        <p className="privacy">
+          Local-only. No telemetry. Your app data stays here.
+        </p>
       </aside>
 
-      <main>
-        <header>
-          <div>
-            <p className="eyebrow">SETUP · DEVICE</p>
-            <h1>Choose an Android device</h1>
-            <p className="subtitle">
-              Connect over USB, use a running emulator, or pair securely over
-              Wi-Fi.
-            </p>
-          </div>
-          <button className="secondary" onClick={() => void refresh()}>
-            <RefreshCw className={loading ? "spin" : ""} aria-hidden="true" />
-            Refresh
-          </button>
-        </header>
-
-        <section className="pair-card">
-          <div className="pair-icon">
-            <Wifi aria-hidden="true" />
-          </div>
-          <div>
-            <h2>Pair wirelessly</h2>
-            <p>
-              Android 11+ · Developer options → Wireless debugging → Pair device
-              with QR code
-            </p>
-          </div>
-          <button disabled title="QR pairing is not implemented yet">
-            Coming soon
-          </button>
-        </section>
-
-        <div className="section-title">
-          <h2>Available devices</h2>
-          <span>{devices.length}</span>
-        </div>
-
-        {error && (
-          <div className="error" role="alert">
-            <CircleHelp aria-hidden="true" />
+      {step === "device" ? (
+        <main>
+          <header>
             <div>
-              <strong>Device discovery failed</strong>
-              <p>{error}</p>
+              <p className="eyebrow">SETUP · DEVICE</p>
+              <h1>Choose an Android device</h1>
+              <p className="subtitle">
+                Connect over USB, use a running emulator, or pair securely over
+                Wi-Fi.
+              </p>
             </div>
-          </div>
-        )}
+            <button className="secondary" onClick={() => void refresh()}>
+              <RefreshCw className={loading ? "spin" : ""} aria-hidden="true" />
+              Refresh
+            </button>
+          </header>
 
-        {!error && !loading && devices.length === 0 && (
-          <div className="empty">
-            <Smartphone aria-hidden="true" />
-            <h3>No Android devices found</h3>
-            <p>
-              Connect a phone with USB debugging enabled or start an Android
-              Studio emulator, then refresh.
-            </p>
-          </div>
-        )}
+          <section className="pair-card">
+            <div className="pair-icon">
+              <Wifi aria-hidden="true" />
+            </div>
+            <div>
+              <h2>Pair wirelessly</h2>
+              <p>
+                Android 11+ · Developer options → Wireless debugging → Pair
+                device with QR code
+              </p>
+            </div>
+            <button disabled title="QR pairing is not implemented yet">
+              Coming soon
+            </button>
+          </section>
 
-        <div className="device-grid" role="radiogroup" aria-label="Devices">
-          {devices.map((device) => {
-            const Icon = connectionIcon[device.connection_type];
-            const isSelected = selected === device.serial;
-            const disabled = device.authorization_status !== "authorized";
-            return (
-              <button
-                className={`device-card ${isSelected ? "selected" : ""}`}
-                key={device.serial}
-                role="radio"
-                aria-checked={isSelected}
-                disabled={disabled}
-                onClick={() => setSelected(device.serial)}
-              >
-                <Icon aria-hidden="true" />
-                <div>
-                  <h3>{device.model ?? device.serial}</h3>
-                  <p>{device.serial}</p>
-                  <div className="metadata">
-                    <span>{device.connection_type}</span>
-                    {device.android_version && (
-                      <span>{platformLabel(device)}</span>
-                    )}
-                    {device.resolution && <span>{device.resolution}</span>}
-                    {device.architecture && <span>{device.architecture}</span>}
+          <div className="section-title">
+            <h2>Available devices</h2>
+            <span>{devices.length}</span>
+          </div>
+
+          {error && (
+            <div className="error" role="alert">
+              <CircleHelp aria-hidden="true" />
+              <div>
+                <strong>Device discovery failed</strong>
+                <p>{error}</p>
+              </div>
+            </div>
+          )}
+
+          {!error && !loading && devices.length === 0 && (
+            <div className="empty">
+              <Smartphone aria-hidden="true" />
+              <h3>No Android devices found</h3>
+              <p>
+                Connect a phone with USB debugging enabled or start an Android
+                Studio emulator, then refresh.
+              </p>
+            </div>
+          )}
+
+          <div className="device-grid" role="radiogroup" aria-label="Devices">
+            {devices.map((device) => {
+              const Icon = connectionIcon[device.connection_type];
+              const isSelected = selected === device.serial;
+              const disabled = device.authorization_status !== "authorized";
+              return (
+                <button
+                  className={`device-card ${isSelected ? "selected" : ""}`}
+                  key={device.serial}
+                  role="radio"
+                  aria-checked={isSelected}
+                  disabled={disabled}
+                  onClick={() => setSelected(device.serial)}
+                >
+                  <Icon aria-hidden="true" />
+                  <div>
+                    <h3>{device.model ?? device.serial}</h3>
+                    <p>{device.serial}</p>
+                    <div className="metadata">
+                      <span>{device.connection_type}</span>
+                      {device.android_version && (
+                        <span>{platformLabel(device)}</span>
+                      )}
+                      {device.resolution && <span>{device.resolution}</span>}
+                      {device.architecture && (
+                        <span>{device.architecture}</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <span className={`status ${device.authorization_status}`}>
-                  {device.authorization_status}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+                  <span className={`status ${device.authorization_status}`}>
+                    {device.authorization_status}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
 
-        <footer>
-          <p>
-            {selected
-              ? "Device ready. Application selection is coming in the next build."
-              : "Select an authorized device to continue."}
-          </p>
-          <button disabled>Continue</button>
-        </footer>
-      </main>
+          <footer>
+            <p>
+              {selected
+                ? "Device ready. Continue to choose an application."
+                : "Select an authorized device to continue."}
+            </p>
+            <button
+              disabled={!selected}
+              onClick={() => void continueToApplications()}
+            >
+              Continue
+            </button>
+          </footer>
+        </main>
+      ) : (
+        <main>
+          <header>
+            <div>
+              <p className="eyebrow">SETUP · APPLICATION</p>
+              <h1>Choose an application</h1>
+              <p className="subtitle">
+                Select a third-party application installed on{" "}
+                {devices.find((device) => device.serial === selected)?.model ??
+                  selected}
+                .
+              </p>
+            </div>
+            <button className="secondary" onClick={() => setStep("device")}>
+              <ArrowLeft aria-hidden="true" />
+              Back
+            </button>
+          </header>
+
+          <label className="search-field">
+            <Search aria-hidden="true" />
+            <span>Search installed applications</span>
+            <input
+              type="search"
+              value={appSearch}
+              onChange={(event) => setAppSearch(event.target.value)}
+              placeholder="Package name"
+            />
+          </label>
+
+          <div className="section-title">
+            <h2>Installed applications</h2>
+            <span>{filteredApps.length}</span>
+          </div>
+
+          {error && (
+            <div className="error" role="alert">
+              <CircleHelp aria-hidden="true" />
+              <div>
+                <strong>Application action failed</strong>
+                <p>{error}</p>
+              </div>
+            </div>
+          )}
+
+          {!error && !appsLoading && apps.length === 0 && (
+            <div className="empty">
+              <AppWindow aria-hidden="true" />
+              <h3>No third-party applications found</h3>
+              <p>
+                Install an application on the selected device, then go back and
+                try again.
+              </p>
+            </div>
+          )}
+
+          {appsLoading ? (
+            <div className="loading-state" role="status">
+              <RefreshCw className="spin" aria-hidden="true" />
+              Reading installed applications…
+            </div>
+          ) : (
+            <div
+              className="app-list"
+              role="radiogroup"
+              aria-label="Installed applications"
+            >
+              {filteredApps.map((app) => (
+                <button
+                  className={`app-row ${selectedApp === app.package_name ? "selected" : ""}`}
+                  key={app.package_name}
+                  role="radio"
+                  aria-checked={selectedApp === app.package_name}
+                  onClick={() => setSelectedApp(app.package_name)}
+                >
+                  <AppWindow aria-hidden="true" />
+                  <span>
+                    <strong>{app.package_name}</strong>
+                    <small>
+                      {app.version_name
+                        ? `Version ${app.version_name}${app.version_code ? ` (${app.version_code})` : ""}`
+                        : "Version unavailable"}
+                    </small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <footer>
+            <p>
+              {selectedApp
+                ? "Launch the app, complete login manually, then return here."
+                : "Select an application to continue."}
+            </p>
+            <button
+              disabled={!selectedApp || launching}
+              onClick={() => void launchSelectedApplication()}
+            >
+              {launching ? "Launching…" : "Launch application"}
+            </button>
+          </footer>
+        </main>
+      )}
     </div>
   );
 }

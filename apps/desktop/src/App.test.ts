@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { platformLabel, resolveInitialTheme } from "./App";
+import { nextStepForDevice, platformLabel, resolveInitialTheme } from "./App";
 import type { AndroidDevice } from "./types";
 
 const device: AndroidDevice = {
@@ -29,5 +29,15 @@ describe("theme preference", () => {
   it("uses the system theme when no preference was saved", () => {
     expect(resolveInitialTheme(null, true)).toBe("dark");
     expect(resolveInitialTheme(null, false)).toBe("light");
+  });
+});
+
+describe("device workflow navigation", () => {
+  it("advances to application selection after a device is selected", () => {
+    expect(nextStepForDevice("emulator-5554")).toBe("application");
+  });
+
+  it("stays on device selection without a selected device", () => {
+    expect(nextStepForDevice(undefined)).toBe("device");
   });
 });

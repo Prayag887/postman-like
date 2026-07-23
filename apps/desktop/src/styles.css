@@ -46,7 +46,9 @@
   --md-focus: #89f8c7;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 body {
   margin: 0;
@@ -62,7 +64,10 @@ button {
   border: 0;
   border-radius: 20px;
   padding: 0 24px;
-  font: 600 14px/1 "Roboto Flex", "Roboto", sans-serif;
+  font:
+    600 14px/1 "Roboto Flex",
+    "Roboto",
+    sans-serif;
   letter-spacing: 0.01em;
   color: var(--md-on-primary);
   background: var(--md-primary);
@@ -128,10 +133,17 @@ aside {
   background: var(--md-primary-container);
 }
 
-.brand-mark svg { width: 22px; }
+.brand-mark svg {
+  width: 22px;
+}
 .brand strong,
-.brand small { display: block; }
-.brand strong { font-size: 16px; line-height: 20px; }
+.brand small {
+  display: block;
+}
+.brand strong {
+  font-size: 16px;
+  line-height: 20px;
+}
 .brand small {
   margin-top: 2px;
   color: var(--md-on-surface-variant);
@@ -157,7 +169,9 @@ aside {
   box-shadow: none;
 }
 
-.theme-toggle svg { width: 21px; }
+.theme-toggle svg {
+  width: 21px;
+}
 
 nav {
   display: grid;
@@ -229,7 +243,9 @@ header {
   gap: 32px;
 }
 
-header > div { flex: 1; }
+header > div {
+  flex: 1;
+}
 
 .eyebrow {
   margin: 0 0 8px;
@@ -272,10 +288,18 @@ h1 {
   background: color-mix(in srgb, var(--md-primary) 8%, transparent);
 }
 
-.secondary svg { width: 18px; }
-.spin { animation: spin 800ms linear infinite; }
+.secondary svg {
+  width: 18px;
+}
+.spin {
+  animation: spin 800ms linear infinite;
+}
 
-@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 .pair-card {
   min-height: 96px;
@@ -289,7 +313,9 @@ h1 {
   background: var(--md-primary-container);
 }
 
-.pair-card > div:nth-child(2) { flex: 1; }
+.pair-card > div:nth-child(2) {
+  flex: 1;
+}
 
 .pair-icon {
   width: 48px;
@@ -301,12 +327,27 @@ h1 {
   background: var(--md-primary);
 }
 
-.pair-icon svg { width: 22px; }
-.pair-card h2 { margin: 0 0 4px; font-size: 18px; line-height: 24px; font-weight: 600; }
-.pair-card p { margin: 0; font-size: 14px; line-height: 20px; }
+.pair-icon svg {
+  width: 22px;
+}
+.pair-card h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+}
+.pair-card p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
 .pair-card button:disabled {
   color: color-mix(in srgb, var(--md-on-primary-container) 62%, transparent);
-  background: color-mix(in srgb, var(--md-on-primary-container) 12%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--md-on-primary-container) 12%,
+    transparent
+  );
 }
 
 .section-title {
@@ -316,7 +357,12 @@ h1 {
   align-items: center;
 }
 
-.section-title h2 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; }
+.section-title h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
+}
 .section-title span {
   min-width: 24px;
   height: 24px;
@@ -330,7 +376,10 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-.device-grid { display: grid; gap: 12px; }
+.device-grid {
+  display: grid;
+  gap: 12px;
+}
 
 .device-card {
   width: 100%;
@@ -363,11 +412,19 @@ h1 {
   color: var(--md-primary);
 }
 
-.device-card h3 { margin: 0 0 4px; font-size: 16px; line-height: 24px; font-weight: 600; }
+.device-card h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+}
 .device-card p {
   margin: 0;
   color: var(--md-on-surface-variant);
-  font: 12px/18px ui-monospace, "SFMono-Regular", monospace;
+  font:
+    12px/18px ui-monospace,
+    "SFMono-Regular",
+    monospace;
   overflow-wrap: anywhere;
 }
 
@@ -398,7 +455,9 @@ h1 {
 }
 
 .status.unauthorized,
-.status.offline { color: var(--md-error); }
+.status.offline {
+  color: var(--md-error);
+}
 
 .empty {
   min-height: 220px;
@@ -413,9 +472,23 @@ h1 {
   text-align: center;
 }
 
-.empty svg { width: 32px; margin-bottom: 16px; color: var(--md-primary); }
-.empty h3 { margin: 0 0 8px; color: var(--md-on-surface); font-size: 18px; line-height: 24px; }
-.empty p { max-width: 520px; margin: 0; font-size: 14px; line-height: 20px; }
+.empty svg {
+  width: 32px;
+  margin-bottom: 16px;
+  color: var(--md-primary);
+}
+.empty h3 {
+  margin: 0 0 8px;
+  color: var(--md-on-surface);
+  font-size: 18px;
+  line-height: 24px;
+}
+.empty p {
+  max-width: 520px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
 
 .error {
   min-height: 88px;
@@ -429,9 +502,17 @@ h1 {
   background: var(--md-error-container);
 }
 
-.error svg { width: 24px; }
-.error strong { font-size: 16px; }
-.error p { margin: 4px 0 0; font-size: 14px; line-height: 20px; }
+.error svg {
+  width: 24px;
+}
+.error strong {
+  font-size: 16px;
+}
+.error p {
+  margin: 4px 0 0;
+  font-size: 14px;
+  line-height: 20px;
+}
 
 footer {
   min-height: 80px;
@@ -451,16 +532,165 @@ footer p {
   line-height: 20px;
 }
 
+.search-field {
+  position: relative;
+  min-height: 72px;
+  margin-top: 28px;
+  padding: 8px 16px 8px 52px;
+  border: 1px solid var(--md-outline);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  color: var(--md-on-surface-variant);
+  background: var(--md-surface-container-low);
+}
+
+.search-field > svg {
+  position: absolute;
+  left: 18px;
+  top: 24px;
+  width: 22px;
+  color: var(--md-on-surface-variant);
+}
+
+.search-field > span {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.search-field input {
+  width: 100%;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--md-on-surface);
+  background: transparent;
+  font:
+    16px/24px "Roboto Flex",
+    "Roboto",
+    sans-serif;
+}
+
+.search-field:focus-within {
+  border: 2px solid var(--md-primary);
+  padding: 7px 15px 7px 51px;
+}
+
+.app-list {
+  max-height: min(52vh, 560px);
+  overflow: auto;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 16px;
+  background: var(--md-surface-container-low);
+}
+
+.app-row {
+  width: 100%;
+  min-height: 72px;
+  padding: 12px 20px;
+  border-radius: 0;
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 12px;
+  align-items: center;
+  color: var(--md-on-surface);
+  background: transparent;
+  text-align: left;
+}
+
+.app-row + .app-row {
+  border-top: 1px solid var(--md-outline-variant);
+}
+
+.app-row:hover:not(:disabled) {
+  background: var(--md-surface-container);
+  box-shadow: none;
+}
+
+.app-row.selected {
+  color: var(--md-on-secondary-container);
+  background: var(--md-secondary-container);
+}
+
+.app-row > svg {
+  width: 24px;
+  color: var(--md-primary);
+}
+
+.app-row span,
+.app-row strong,
+.app-row small {
+  min-width: 0;
+  display: block;
+}
+
+.app-row strong {
+  overflow: hidden;
+  font-size: 15px;
+  line-height: 22px;
+  text-overflow: ellipsis;
+}
+
+.app-row small {
+  margin-top: 2px;
+  color: var(--md-on-surface-variant);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.loading-state {
+  min-height: 160px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--md-on-surface-variant);
+  background: var(--md-surface-container-low);
+  font-size: 14px;
+}
+
+.loading-state svg {
+  width: 22px;
+  color: var(--md-primary);
+}
+
 @media (max-width: 860px) {
-  .app-shell { grid-template-columns: 88px minmax(0, 1fr); }
-  aside { padding-inline: 8px; }
-  .brand { justify-content: center; padding: 0; }
-  .brand > div { display: none; }
-  .theme-toggle { position: absolute; bottom: 20px; left: 20px; }
-  nav button { height: 64px; padding: 0; justify-content: center; font-size: 0; }
-  nav button span { font-size: 12px; }
-  .privacy { display: none; }
-  main { padding-inline: 28px; }
+  .app-shell {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+  aside {
+    padding-inline: 8px;
+  }
+  .brand {
+    justify-content: center;
+    padding: 0;
+  }
+  .brand > div {
+    display: none;
+  }
+  .theme-toggle {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+  }
+  nav button {
+    height: 64px;
+    padding: 0;
+    justify-content: center;
+    font-size: 0;
+  }
+  nav button span {
+    font-size: 12px;
+  }
+  .privacy {
+    display: none;
+  }
+  main {
+    padding-inline: 28px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

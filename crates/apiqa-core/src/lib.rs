@@ -39,6 +39,13 @@ pub struct AndroidDevice {
     pub product: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AndroidApp {
+    pub package_name: String,
+    pub version_name: Option<String>,
+    pub version_code: Option<u64>,
+}
+
 #[derive(Debug, Error)]
 pub enum DeviceError {
     #[error(
@@ -145,6 +152,120 @@ pub fn list_devices(runner: &dyn AdbRunner) -> Result<Vec<AndroidDevice>, Device
         })
         .collect::<Vec<_>>()
         .pipe(Ok)
+}
+
+pub fn list_third_party_apps(
+    runner: &dyn AdbRunner,
+    serial: &str,
+) -> Result<Vec<AndroidApp>, DeviceError> {
+    let output = runner.run(&["-s", serial, "shell", "pm", "list", "packages", "-3"])?;
+    let mut apps = parse_package_list(&output)
+        .into_iter()
+        .map(|package_name| {
+            let details = runner
+                .run(&["-s", serial, "shell", "dumpsys", "package", &package_name])
+                .unwrap_or_default();
+            let (version_name, version_code) = parse_package_version(&details);
+            AndroidApp {
+                package_name,
+                version_name,
+                version_code,
+            }
+        })
+        .collect::<Vec<_>>();
+    apps.sort_by(|left, right| left.package_name.cmp(&right.package_name));
+    Ok(apps)
+}
+
+pub fn launch_app(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    package_name: &str,
+) -> Result<(), DeviceError> {
+    validate_package_name(package_name)?;
+    let activities = runner.run(&[
+        "-s",
+        serial,
+        "shell",
+        "cmd",
+        "package",
+        "query-activities",
+        "--brief",
+        "-a",
+        "android.intent.action.MAIN",
+        "-c",
+        "android.intent.category.LAUNCHER",
+        package_name,
+    ])?;
+    let component = parse_launcher_activity(&activities, package_name).ok_or_else(|| {
+        DeviceError::Adb(format!(
+            "{package_name} does not expose a launchable activity"
+        ))
+    })?;
+    let output = runner.run(&["-s", serial, "shell", "am", "start", "-W", "-n", &component])?;
+    if output.lines().any(|line| line.trim().starts_with("Error:")) {
+        return Err(DeviceError::Adb(
+            output
+                .lines()
+                .find(|line| line.trim().starts_with("Error:"))
+                .unwrap_or("failed to launch application")
+                .trim()
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn parse_launcher_activity(output: &str, package_name: &str) -> Option<String> {
+    let mut candidates = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with(package_name) && line.contains('/'))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|component| {
+        let lowercase = component.to_ascii_lowercase();
+        lowercase.contains("leakcanary")
+            || lowercase.contains("debug")
+            || lowercase.contains("test")
+    });
+    candidates.first().map(|component| (*component).to_owned())
+}
+
+fn validate_package_name(package_name: &str) -> Result<(), DeviceError> {
+    let valid = !package_name.is_empty()
+        && package_name.contains('.')
+        && package_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_'));
+    if valid {
+        Ok(())
+    } else {
+        Err(DeviceError::Adb("invalid Android package name".to_owned()))
+    }
+}
+
+pub fn parse_package_list(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("package:"))
+        .map(str::trim)
+        .filter(|package| !package.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+pub fn parse_package_version(output: &str) -> (Option<String>, Option<u64>) {
+    let version_name = output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("versionName="))
+        .map(str::trim)
+        .filter(|version| !version.is_empty() && *version != "null")
+        .map(str::to_owned);
+    let version_code = output.lines().find_map(|line| {
+        let value = line.trim().strip_prefix("versionCode=")?;
+        value.split_whitespace().next()?.parse().ok()
+    });
+    (version_name, version_code)
 }
 
 fn enrich_device(runner: &dyn AdbRunner, device: &mut AndroidDevice) {
@@ -264,5 +385,39 @@ deadbeef offline\n";
     fn ignores_daemon_noise_and_headers() {
         let output = "* daemon started successfully\nList of devices attached\n\n";
         assert!(parse_device_list(output).is_empty());
+    }
+
+    #[test]
+    fn parses_package_names_and_versions() {
+        assert_eq!(
+            parse_package_list("package:com.example.beta\npackage:com.example.alpha\n"),
+            ["com.example.beta", "com.example.alpha"]
+        );
+        assert_eq!(
+            parse_package_version(
+                "Packages:\n  versionCode=42 minSdk=24 targetSdk=35\n  versionName=2.4.1\n"
+            ),
+            (Some("2.4.1".to_owned()), Some(42))
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_package_names_before_launch() {
+        assert!(validate_package_name("com.example.app").is_ok());
+        assert!(validate_package_name("com.example;reboot").is_err());
+        assert!(validate_package_name("").is_err());
+    }
+
+    #[test]
+    fn prefers_product_launcher_over_debug_tooling_activity() {
+        let output = "2 activities found:\n\
+  Activity #0:\n\
+    com.example.app/com.example.MainActivity\n\
+  Activity #1:\n\
+    com.example.app/leakcanary.internal.activity.LeakLauncherActivity\n";
+        assert_eq!(
+            parse_launcher_activity(output, "com.example.app").as_deref(),
+            Some("com.example.app/com.example.MainActivity")
+        );
     }
 }

@@ -1,9 +1,6 @@
 export type ConnectionType = "usb" | "wireless" | "emulator";
 export type AuthorizationStatus =
-  | "authorized"
-  | "unauthorized"
-  | "offline"
-  | "unknown";
+  "authorized" | "unauthorized" | "offline" | "unknown";
 
 export interface AndroidDevice {
   serial: string;
@@ -16,4 +13,10 @@ export interface AndroidDevice {
   density?: number;
   architecture?: string;
   product?: string;
+}
+
+export interface AndroidApp {
+  package_name: string;
+  version_name?: string;
+  version_code?: number;
 }
