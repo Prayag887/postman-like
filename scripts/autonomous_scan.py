@@ -40,6 +40,7 @@ class StateRecord:
     flow_stage: str
     semantic_confidence: int
     semantic_evidence: list[str]
+    semantic_action_variants: list[dict[str, Any]]
 
 
 @dataclass
@@ -61,15 +62,6 @@ class SamplingGroup:
 RISKY_WORDS = re.compile(
     r"\b(delete|remove|logout|sign out|pay|purchase|buy|transfer|send|post|"
     r"publish|submit|unsubscribe|cancel subscription|accept|agree)\b",
-    re.IGNORECASE,
-)
-CARD_VARIANTS = (
-    ("completed", re.compile(r"\b(completed|finished|ended|past)\b", re.I)),
-    ("ongoing", re.compile(r"\b(ongoing|in progress|live now|happening now)\b", re.I)),
-    ("upcoming", re.compile(r"\b(upcoming|scheduled|starts? in|future)\b", re.I)),
-)
-CARD_LIKE = re.compile(
-    r"\b(class|course|exam|assignment|lesson|session|event|booking|order)\b",
     re.IGNORECASE,
 )
 
@@ -166,27 +158,28 @@ def is_immediate_loop(
 
 
 def card_equivalence_key(
-    screen_name: str, action: Action | dict[str, Any]
+    screen_name: str,
+    action: Action | dict[str, Any],
+    classification: dict[str, Any] | None,
 ) -> tuple[str, str] | None:
+    if not classification:
+        return None
     value = asdict(action) if isinstance(action, Action) else action
     label = str(value.get("label", "")).strip()
-    context = str(value.get("context", "")).strip()
-    semantic_text = f"{context} {label}".strip()
     class_name = str(value.get("class_name", ""))
-    if (
-        not label
-        or class_name == "__scroll__"
-        or not CARD_LIKE.search(semantic_text)
-    ):
+    collection = re.sub(
+        r"\s+", " ", str(classification.get("collection", "")).casefold()
+    ).strip()
+    variant = re.sub(
+        r"\s+", " ", str(classification.get("variant", "")).casefold()
+    ).strip()
+    if not label or class_name == "__scroll__" or not collection or not variant:
         return None
-    for variant, pattern in CARD_VARIANTS:
-        if pattern.search(semantic_text):
-            action_role = re.sub(r"\s+", " ", label.casefold())
-            return (
-                f"{screen_name.casefold()}|{class_name}|{variant}|{action_role}",
-                variant,
-            )
-    return None
+    action_role = re.sub(r"\s+", " ", label.casefold())
+    return (
+        f"{screen_name.casefold()}|{collection}|{class_name}|{variant}|{action_role}",
+        variant,
+    )
 
 
 class RepresentativeSampler:
@@ -194,9 +187,12 @@ class RepresentativeSampler:
         self.groups: dict[str, SamplingGroup] = {}
 
     def accept(
-        self, screen_name: str, action: Action | dict[str, Any]
+        self,
+        screen_name: str,
+        action: Action | dict[str, Any],
+        classification: dict[str, Any] | None = None,
     ) -> bool:
-        grouped = card_equivalence_key(screen_name, action)
+        grouped = card_equivalence_key(screen_name, action, classification)
         if grouped is None:
             return True
         key, variant = grouped
@@ -333,22 +329,7 @@ def state_issues(
         dimensions = tuple(map(int, match.groups())) if match else None
         if dimensions and display_height and dimensions[3] >= display_height:
             continue
-        if action.label == "Unlabelled control":
-            issues.append(
-                {
-                    "category": "accessibility",
-                    "severity": "warning",
-                    "confidence": 100,
-                    "state_id": state_id,
-                    "title": "Clickable control has no accessible label",
-                    "evidence": {
-                        "action": asdict(action),
-                        "bounds": action.bounds,
-                        "screenshot": screenshot,
-                    },
-                }
-            )
-        if dimensions:
+        if dimensions and action.label != "Unlabelled control":
             x1, y1, x2, y2 = dimensions
             if x2 - x1 < 48 or y2 - y1 < 48:
                 issues.append(
@@ -750,6 +731,7 @@ def main() -> int:
             flow_stage=str(root_semantics["flow_stage"]),
             semantic_confidence=int(root_semantics["confidence"]),
             semantic_evidence=list(root_semantics["evidence_anchors"]),
+            semantic_action_variants=list(root_semantics["action_variants"]),
         )
     }
     issues = state_issues(root_id, hierarchy, root_actions, str(screenshot.relative_to(output)))
@@ -779,12 +761,18 @@ def main() -> int:
             if state.path
             else state.screen_name
         )
+        variants_by_index = {
+            int(variant["action_index"]): variant
+            for variant in state.semantic_action_variants
+        }
         for action in ordered:
             if action.risk != "safe" or RISKY_WORDS.search(action.label):
                 continue
             if is_immediate_loop(state.path, action):
                 continue
-            if not sampler.accept(sampling_scope, action):
+            if not sampler.accept(
+                sampling_scope, action, variants_by_index.get(action.index)
+            ):
                 continue
             key = (state.id, action_key(action))
             if key in queued:
@@ -925,6 +913,7 @@ def main() -> int:
                 flow_stage=str(semantics["flow_stage"]),
                 semantic_confidence=int(semantics["confidence"]),
                 semantic_evidence=list(semantics["evidence_anchors"]),
+                semantic_action_variants=list(semantics["action_variants"]),
             )
             states[destination_id] = state
             issues.extend(

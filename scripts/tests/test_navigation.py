@@ -6,10 +6,15 @@ from autonomous_scan import (
     RepresentativeSampler,
     StateRecord,
     is_immediate_loop,
+    state_issues,
     transition_issues,
     write_outputs,
 )
-from local_model_scan import Action, discover_actions
+from local_model_scan import (
+    Action,
+    discover_actions,
+    infer_contextual_action_variants,
+)
 
 
 class NavigationTests(unittest.TestCase):
@@ -57,10 +62,10 @@ class NavigationTests(unittest.TestCase):
         )
         self.assertFalse(is_immediate_loop([previous], today))
 
-    def test_repeated_cards_are_sampled_once_per_semantic_variant(self):
+    def test_repeated_cards_use_model_derived_variants_without_a_fixed_taxonomy(self):
         sampler = RepresentativeSampler()
         accepted = []
-        for variant in ("Completed", "Ongoing", "Upcoming"):
+        for variant in ("recorded archive", "interactive room", "waitlisted"):
             for index in range(40):
                 action = Action(
                     index=index,
@@ -70,13 +75,56 @@ class NavigationTests(unittest.TestCase):
                     x=350,
                     y=index + 50,
                     risk="safe",
-                    context=f"Chemistry Live Class · {variant} · item {index}",
+                    context=f"Session · {variant} · item {index}",
                 )
-                if sampler.accept("Live classes", action):
+                classification = {
+                    "collection": "learning sessions",
+                    "variant": variant,
+                }
+                if sampler.accept("Learning", action, classification):
                     accepted.append(action.label)
         self.assertEqual(len(accepted), 3)
         self.assertEqual(
             sum(len(group["skipped"]) for group in sampler.records()), 117
+        )
+
+    def test_contrastive_fallback_discovers_unconfigured_variant_field(self):
+        actions = [
+            Action(
+                index=0,
+                label="Open",
+                class_name="android.view.View",
+                bounds="[0,0][100,100]",
+                x=50,
+                y=50,
+                risk="safe",
+                context="Alpha Session · Recorded archive · By Ada · 45 min · Open",
+            ),
+            Action(
+                index=1,
+                label="Open",
+                class_name="android.view.View",
+                bounds="[0,100][100,200]",
+                x=50,
+                y=150,
+                risk="safe",
+                context="Beta Session · Interactive room · By Ada · 45 min · Open",
+            ),
+            Action(
+                index=2,
+                label="Open",
+                class_name="android.view.View",
+                bounds="[0,200][100,300]",
+                x=50,
+                y=250,
+                risk="safe",
+                context="Gamma Session · Waitlisted · By Ada · 45 min · Open",
+            ),
+        ]
+        inferred = infer_contextual_action_variants(actions)
+        self.assertEqual(
+            [item["variant"] for item in inferred],
+            ["Recorded archive", "Interactive room", "Waitlisted"],
         )
 
     def test_any_safe_control_without_an_effect_is_reported(self):
@@ -97,6 +145,23 @@ class NavigationTests(unittest.TestCase):
         self.assertIn("no observable effect", issues[0]["title"])
         self.assertTrue(issues[0]["likely_causes"])
 
+    def test_unlabelled_controls_are_not_reported_as_bugs(self):
+        action = Action(
+            index=0,
+            label="Unlabelled control",
+            class_name="android.view.View",
+            bounds="[0,48][91,1232]",
+            x=45,
+            y=640,
+            risk="safe",
+        )
+        hierarchy = """<?xml version="1.0"?>
+<hierarchy><node text="Visible screen" class="android.view.View"
+ bounds="[0,0][720,1280]" /></hierarchy>"""
+        self.assertEqual(
+            state_issues("state", hierarchy, [action], "screen.png"), []
+        )
+
     def test_issue_report_only_exists_when_issues_exist(self):
         state = StateRecord(
             id="state",
@@ -111,6 +176,7 @@ class NavigationTests(unittest.TestCase):
             flow_stage="browse",
             semantic_confidence=90,
             semantic_evidence=["Home"],
+            semantic_action_variants=[],
         )
         metadata = {
             "package": "com.example",

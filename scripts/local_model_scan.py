@@ -163,6 +163,55 @@ def fingerprint(hierarchy: str) -> str:
     return hashlib.sha256("\n".join(semantic).encode()).hexdigest()
 
 
+def infer_contextual_action_variants(actions: list[Action]) -> list[dict[str, Any]]:
+    by_role: dict[tuple[str, str], list[Action]] = {}
+    for action in actions:
+        if not action.context or action.context == action.label:
+            continue
+        by_role.setdefault(
+            (action.class_name, action.label.casefold()), []
+        ).append(action)
+    inferred: list[dict[str, Any]] = []
+    for (_, label), candidates in by_role.items():
+        if len(candidates) < 2:
+            continue
+        fields = [
+            [part.strip() for part in action.context.split("·") if part.strip()]
+            for action in candidates
+        ]
+        width = min(len(parts) for parts in fields)
+        positions: list[tuple[float, int]] = []
+        for position in range(width):
+            values = [parts[position] for parts in fields]
+            normalized = {DYNAMIC_TEXT.sub("<dynamic>", value).casefold() for value in values}
+            if len(normalized) < 2:
+                continue
+            if any(value.casefold() == label for value in values):
+                continue
+            numeric_ratio = sum(
+                bool(re.search(r"\d", value)) for value in values
+            ) / len(values)
+            average_words = sum(len(value.split()) for value in values) / len(values)
+            # Short, non-numeric fields that vary in the same structural
+            # position are usually badges, states, tiers, or content variants.
+            positions.append(
+                (average_words + numeric_ratio * 10 + position * 0.01, position)
+            )
+        if not positions:
+            continue
+        _, selected_position = min(positions)
+        collection = f"{candidates[0].label} collection"
+        for action, parts in zip(candidates, fields):
+            inferred.append(
+                {
+                    "action_index": action.index,
+                    "collection": collection,
+                    "variant": parts[selected_position][:80],
+                }
+            )
+    return inferred
+
+
 def load_model() -> tuple[Any, Any, str]:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -208,11 +257,12 @@ def understand_screen(
         "visible_text": visible[:40],
         "actions": [
             {
+                "action_index": index,
                 "label": action.label,
                 "role": action.class_name,
                 "context": action.context[:240],
             }
-            for action in actions[:24]
+            for index, action in enumerate(actions[:24])
         ],
     }
     messages = [
@@ -223,7 +273,14 @@ def understand_screen(
                 "Return strict JSON with: screen_name (short noun phrase), "
                 "purpose (one sentence), flow_stage (entry, browse, detail, form, "
                 "confirmation, settings, error, or unknown), and confidence "
-                "(integer 0-100). Do not invent app behavior."
+                "(integer 0-100). Also return action_variants as an array. For "
+                "actions belonging to repeated collection items, include "
+                "action_index, collection (a stable semantic family name), and "
+                "variant (the visible state/type that makes this item meaningfully "
+                "different). Infer variants from evidence such as badges, status, "
+                "capabilities, or content shape; do not use a predefined taxonomy. "
+                "Omit ordinary navigation and actions without collection context. "
+                "Do not invent app behavior."
             ),
         },
         {"role": "user", "content": json.dumps(evidence)},
@@ -278,6 +335,40 @@ def understand_screen(
             elif actions:
                 result["flow_stage"] = "browse"
         result["evidence_anchors"] = visible[:8]
+        variants = result.get("action_variants", [])
+        if not isinstance(variants, list):
+            variants = []
+        validated_variants: list[dict[str, Any]] = []
+        for variant in variants:
+            if not isinstance(variant, dict):
+                continue
+            try:
+                action_index = int(variant["action_index"])
+                collection = str(variant["collection"]).strip()
+                group = str(variant["variant"]).strip()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (
+                0 <= action_index < min(len(actions), 24)
+                and collection
+                and group
+            ):
+                validated_variants.append(
+                    {
+                        "action_index": action_index,
+                        "collection": collection[:80],
+                        "variant": group[:80],
+                    }
+                )
+        result["action_variants"] = validated_variants
+        classified = {
+            variant["action_index"] for variant in validated_variants
+        }
+        result["action_variants"].extend(
+            variant
+            for variant in infer_contextual_action_variants(actions[:24])
+            if variant["action_index"] not in classified
+        )
         result["raw_response"] = response
         return result
     except (ValueError, TypeError, json.JSONDecodeError) as error:
@@ -288,6 +379,7 @@ def understand_screen(
             "flow_stage": "unknown",
             "confidence": 0,
             "evidence_anchors": visible[:8],
+            "action_variants": infer_contextual_action_variants(actions[:24]),
             "validation_error": str(error),
             "raw_response": response,
         }
