@@ -216,10 +216,10 @@ export function App() {
         <footer>
           <p>
             {selected
-              ? "Device ready. Application selection is next."
+              ? "Device ready. Application selection is coming in the next build."
               : "Select an authorized device to continue."}
           </p>
-          <button disabled={!selected}>Continue</button>
+          <button disabled>Continue</button>
         </footer>
       </main>
     </div>
