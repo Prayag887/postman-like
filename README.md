@@ -84,11 +84,26 @@ The scanner captures screenshots and UI hierarchies, fingerprints states, discov
 
 This is currently a developer-facing vertical slice. Live progress and scan controls are not yet connected to the desktop Live Scan screen.
 
+For graph-based exploration with replay, scrolling, checkpoint persistence, deterministic issue analysis, and an agent report:
+
+```bash
+python3 scripts/autonomous_scan.py \
+  --serial emulator-5554 \
+  --package com.example.app \
+  --max-states 30 \
+  --max-actions 100 \
+  --max-minutes 15
+```
+
+Each branch is restored from the authenticated application root and replayed using semantic selectors before its next action runs. The scan directory contains `checkpoint.json`, `graph.json`, `graph.mmd`, `transitions/transitions.jsonl`, `model-decisions.jsonl`, `issues.jsonl`, `coverage.json`, `agent_report.md`, screenshots, and UI hierarchies.
+
+Limits are explicit. A run that stops with frontier entries remaining reports `complete: false`; it never claims full coverage merely because a configured limit was reached.
+
 ## Roadmap (not yet implemented)
 
 - Secure Android 11+ wireless QR pairing and pairing-code fallback.
 - Application/APK selection, launch, and manual login handoff.
-- Persistent multi-pass state/action exploration beyond the current bounded local-model slice.
+- Multi-pass exploration, reverse transitions, and resume-from-checkpoint beyond the current replay/checkpoint slice.
 - UI hierarchy capture, screenshots, scrolling, replay, and recovery.
 - Deterministic crash, ANR, navigation, loading, layout, accessibility, and form analyzers.
 - Live graph and scan progress.

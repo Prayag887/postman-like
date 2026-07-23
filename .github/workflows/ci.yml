@@ -31,7 +31,7 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
-      - run: python -m py_compile scripts/local_model_scan.py
+      - run: python -m py_compile scripts/local_model_scan.py scripts/autonomous_scan.py
 
   frontend:
     name: Frontend
