@@ -15,6 +15,7 @@ App Tester is an open-source, local-first desktop application for autonomous And
 - Safety-gated local-model exploration using Qwen3-0.6B, with versioned state and transition evidence.
 - Session-aware depth-first navigation that never force-stops or relaunches the target application.
 - A semantic action ledger that prevents tabs and ordinary controls from being re-tested when timers or list content create a new state fingerprint.
+- Feature-fair scheduling that periodically rotates away from the current semantic screen instead of exhausting one feature first.
 - Local-model discovery and representative sampling of repeated collection variants without user configuration or a fixed status taxonomy.
 - Local semantic screen summaries and flow-stage classification.
 - Redacted API/DTO parsing and Android StrictMode incident capture from target-process logcat.
@@ -99,7 +100,7 @@ python3 scripts/autonomous_scan.py \
   --max-minutes 15
 ```
 
-Newly reached screens are explored depth-first in the existing app session. The scanner attaches to the application already open in the foreground. To reach another branch it uses the Android back stack and semantic actions inside that same process. If a branch cannot be reached without leaving the target application, it is skipped; the scanner never force-stops or relaunches the app. The local model records a short screen name, purpose, flow stage, and confidence for every state.
+Newly reached screens are explored in the existing app session. The scanner attaches to the application already open in the foreground. To reach another branch it uses only visible in-app Back, Close, or Navigate Up controls and semantic actions inside that same process. It never sends Android's system Back key. If a branch cannot be reached through visible controls without leaving the target application, it is skipped; the scanner never closes, force-stops, or relaunches the app. A fairness limit rotates the frontier after several consecutive actions on one semantic screen. The local model records a short screen name, purpose, flow stage, and confidence for every state.
 
 Target-process logcat is correlated with the action and screen active at the time. Recognized JSON/DTO parsing failures include the parser/DTO name, redacted curl, redacted response evidence, timestamp, screen, and navigation path when those values were actually logged by the application. StrictMode reports include the screen, triggering action, navigation path, timestamp, and stack excerpt. Secrets in authorization, cookie, API-key, token, password, and session fields are redacted. Missing network evidence is explicitly reported rather than inferred.
 

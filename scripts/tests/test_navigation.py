@@ -1,11 +1,14 @@
 import unittest
+from collections import deque
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from autonomous_scan import (
     RepresentativeSampler,
     StateRecord,
+    FrontierItem,
     is_immediate_loop,
+    pop_fair_frontier,
     semantic_action_key,
     state_issues,
     transition_issues,
@@ -255,6 +258,42 @@ class NavigationTests(unittest.TestCase):
         ).read_text()
         self.assertNotIn('"force-stop"', scanner)
         self.assertNotIn('"am", "start"', scanner)
+        self.assertNotIn("KEYCODE_BACK", scanner)
+
+    def test_fair_scheduler_rotates_to_another_semantic_screen(self):
+        def state(identifier, screen):
+            return StateRecord(
+                id=identifier,
+                ordinal=0,
+                path=[],
+                hierarchy="",
+                screenshot="",
+                actions_found=1,
+                scrollables=0,
+                screen_name=screen,
+                purpose="",
+                flow_stage="browse",
+                semantic_confidence=90,
+                semantic_evidence=[],
+                semantic_action_variants=[],
+            )
+
+        states = {
+            "same-1": state("same-1", "Live classes"),
+            "same-2": state("same-2", "Live classes"),
+            "other": state("other", "Home"),
+        }
+        frontier = deque(
+            [
+                FrontierItem("same-1", [], {"label": "Today"}),
+                FrontierItem("same-2", [], {"label": "Tomorrow"}),
+                FrontierItem("other", [], {"label": "Practice"}),
+            ]
+        )
+        selected = pop_fair_frontier(
+            frontier, states, "Live classes", consecutive_on_screen=4
+        )
+        self.assertEqual(selected.source_id, "other")
 
 
 if __name__ == "__main__":

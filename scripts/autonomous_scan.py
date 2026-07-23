@@ -285,7 +285,16 @@ def navigate_in_session(
             break
         common += 1
     for _ in range(len(current_path) - common):
-        run_adb(serial, binary, "shell", "input", "keyevent", "KEYCODE_BACK")
+        actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
+        back_actions = [
+            action
+            for action in actions
+            if action.label.casefold()
+            in {"back", "close", "navigate up", "close sheet"}
+        ]
+        if not back_actions:
+            return False, hierarchy
+        perform_action(serial, binary, back_actions[0])
         hierarchy = wait_for_stability(serial, binary)
         if foreground_package(serial, binary) != package:
             return False, hierarchy
@@ -299,6 +308,25 @@ def navigate_in_session(
         if foreground_package(serial, binary) != package:
             return False, hierarchy
     return True, hierarchy
+
+
+def pop_fair_frontier(
+    frontier: deque[FrontierItem],
+    states: dict[str, StateRecord],
+    current_screen: str,
+    consecutive_on_screen: int,
+    limit: int = 4,
+) -> FrontierItem:
+    if consecutive_on_screen < limit:
+        return frontier.popleft()
+    for index, item in enumerate(frontier):
+        source = states.get(item.source_id)
+        if source and source.screen_name != current_screen:
+            frontier.rotate(-index)
+            selected = frontier.popleft()
+            frontier.rotate(index)
+            return selected
+    return frontier.popleft()
 
 
 def state_issues(
@@ -808,6 +836,9 @@ def main() -> int:
     current_state_id = root_id
     current_hierarchy = hierarchy
     current_path: list[dict[str, Any]] = []
+    last_destination_screen = states[root_id].screen_name
+    consecutive_on_screen = 0
+    skipped_branches: list[dict[str, Any]] = []
 
     while (
         frontier
@@ -815,7 +846,14 @@ def main() -> int:
         and len(transitions) < args.max_actions
         and time.monotonic() < deadline
     ):
-        item = frontier.popleft()
+        item = pop_fair_frontier(
+            frontier,
+            states,
+            states[current_state_id].screen_name
+            if current_state_id in states
+            else "",
+            consecutive_on_screen,
+        )
         if item.semantic_key and item.semantic_key in tested_semantic_actions:
             continue
         actual_source_id = item.source_id
@@ -843,14 +881,11 @@ def main() -> int:
                 current_hierarchy,
             )
             if not restored:
-                transitions.append(
+                skipped_branches.append(
                     {
                         "source": item.source_id,
-                        "destination": item.source_id,
                         "action": item.action,
-                        "result": "in_session_restore_failed",
-                        "latency_ms": 0,
-                        "navigation_mode": "in_session_restore",
+                        "reason": "no visible in-app path to queued branch",
                     }
                 )
                 if item.semantic_key:
@@ -986,6 +1021,12 @@ def main() -> int:
             "observable_effects": observable_effects,
         }
         transitions.append(transition)
+        destination_screen = states[destination_id].screen_name
+        if destination_screen == last_destination_screen:
+            consecutive_on_screen += 1
+        else:
+            last_destination_screen = destination_screen
+            consecutive_on_screen = 1
         issues.extend(
             transition_issues(
                 actual_source_id,
@@ -1003,6 +1044,7 @@ def main() -> int:
             "transitions": transitions,
             "frontier": [asdict(entry) for entry in frontier],
             "tested_semantic_actions": sorted(tested_semantic_actions),
+            "skipped_branches": skipped_branches,
         }
         (output / "checkpoint.json").write_text(
             json.dumps(checkpoint, indent=2), encoding="utf-8"
