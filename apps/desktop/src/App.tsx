@@ -488,8 +488,8 @@ export function App() {
                     : "Ready to explore"}
               </h1>
               <p className="subtitle">
-                Qwen3-0.6B ranks deterministic safe actions. Every branch is
-                restored and replayed before execution.
+                Qwen3-0.6B ranks deterministic safe actions. Exploration stays
+                in the open application session and never relaunches it.
               </p>
             </div>
             <button

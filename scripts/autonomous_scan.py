@@ -77,43 +77,6 @@ def run_adb(serial: str, binary: str, *args: str, check: bool = True) -> str:
     return result.stdout
 
 
-def launcher_component(serial: str, package: str, binary: str) -> str:
-    output = run_adb(
-        serial,
-        binary,
-        "shell",
-        "cmd",
-        "package",
-        "query-activities",
-        "--brief",
-        "-a",
-        "android.intent.action.MAIN",
-        "-c",
-        "android.intent.category.LAUNCHER",
-        package,
-    )
-    candidates = [
-        line.strip()
-        for line in output.splitlines()
-        if line.strip().startswith(package) and "/" in line
-    ]
-    candidates.sort(
-        key=lambda value: any(
-            marker in value.casefold() for marker in ("leakcanary", "debug", "test")
-        )
-    )
-    if not candidates:
-        raise RuntimeError(f"{package} has no launcher activity")
-    return candidates[0]
-
-
-def launch_root(serial: str, package: str, binary: str) -> None:
-    component = launcher_component(serial, package, binary)
-    run_adb(serial, binary, "shell", "am", "force-stop", package)
-    run_adb(serial, binary, "shell", "am", "start", "-W", "-n", component)
-    wait_for_stability(serial, binary)
-
-
 def dump_hierarchy(serial: str, binary: str) -> str:
     remote = "/sdcard/app-tester-window.xml"
     run_adb(serial, binary, "shell", "uiautomator", "dump", remote)
@@ -308,15 +271,25 @@ def foreground_component(serial: str, binary: str) -> str | None:
     return match.group(1) if match else None
 
 
-def restore_path(
+def navigate_in_session(
     serial: str,
     package: str,
     binary: str,
-    path: list[dict[str, Any]],
+    current_path: list[dict[str, Any]],
+    target_path: list[dict[str, Any]],
+    hierarchy: str,
 ) -> tuple[bool, str]:
-    launch_root(serial, package, binary)
-    hierarchy = wait_for_stability(serial, binary)
-    for selector in path:
+    common = 0
+    for current, target in zip(current_path, target_path):
+        if action_key(current) != action_key(target):
+            break
+        common += 1
+    for _ in range(len(current_path) - common):
+        run_adb(serial, binary, "shell", "input", "keyevent", "KEYCODE_BACK")
+        hierarchy = wait_for_stability(serial, binary)
+        if foreground_package(serial, binary) != package:
+            return False, hierarchy
+    for selector in target_path[common:]:
         actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
         action = best_match(actions, selector)
         if action is None:
@@ -728,7 +701,11 @@ def main() -> int:
 
     tokenizer, model, device = load_model()
     metadata["model_device"] = device
-    launch_root(args.serial, args.package, args.adb)
+    if foreground_package(args.serial, args.adb) != args.package:
+        raise RuntimeError(
+            f"{args.package} must already be open in the foreground before scanning"
+        )
+    wait_for_stability(args.serial, args.adb)
     hierarchy, screenshot = capture(args.serial, output, 0, args.adb)
     root_id = fingerprint(hierarchy)
     root_actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
@@ -830,6 +807,7 @@ def main() -> int:
     capture_ordinal = 1
     current_state_id = root_id
     current_hierarchy = hierarchy
+    current_path: list[dict[str, Any]] = []
 
     while (
         frontier
@@ -856,8 +834,13 @@ def main() -> int:
                 reused_session = True
         source_hierarchy = current_hierarchy
         if not reused_session:
-            restored, source_hierarchy = restore_path(
-                args.serial, args.package, args.adb, item.path
+            restored, source_hierarchy = navigate_in_session(
+                args.serial,
+                args.package,
+                args.adb,
+                current_path,
+                item.path,
+                current_hierarchy,
             )
             if not restored:
                 transitions.append(
@@ -865,9 +848,9 @@ def main() -> int:
                         "source": item.source_id,
                         "destination": item.source_id,
                         "action": item.action,
-                        "result": "replay_failed",
+                        "result": "in_session_restore_failed",
                         "latency_ms": 0,
-                        "navigation_mode": "replay",
+                        "navigation_mode": "in_session_restore",
                     }
                 )
                 if item.semantic_key:
@@ -876,11 +859,12 @@ def main() -> int:
                 continue
             current_state_id = item.source_id
             current_hierarchy = source_hierarchy
+            current_path = list(item.path)
         collector.collect(
             state_id=actual_source_id,
             screen_name=states[actual_source_id].screen_name,
             action=None,
-            path=states[actual_source_id].path,
+            path=current_path,
         )
         current_actions = with_scroll_actions(
             discover_actions(source_hierarchy), source_hierarchy
@@ -907,7 +891,7 @@ def main() -> int:
             state_id=actual_source_id,
             screen_name=states[actual_source_id].screen_name,
             action=asdict(action),
-            path=states[actual_source_id].path + [asdict(action)],
+            path=current_path + [asdict(action)],
         )
         log_path = output / "logs" / f"transition-{len(transitions):03}.log"
         log_path.write_text(raw_logs, encoding="utf-8")
@@ -953,7 +937,7 @@ def main() -> int:
             state = StateRecord(
                 id=destination_id,
                 ordinal=len(states),
-                path=states[actual_source_id].path + [asdict(action)],
+                path=current_path + [asdict(action)],
                 hierarchy=f"hierarchies/state-{capture_ordinal:03}.xml",
                 screenshot=str(saved_screenshot.relative_to(output)),
                 actions_found=len(destination_actions),
@@ -981,6 +965,7 @@ def main() -> int:
             capture_ordinal += 1
         current_state_id = destination_id
         current_hierarchy = destination_hierarchy
+        current_path = current_path + [asdict(action)]
         transition = {
             "source": actual_source_id,
             "destination": destination_id,
@@ -989,7 +974,9 @@ def main() -> int:
             if destination_id != actual_source_id
             else "no_change",
             "latency_ms": latency_ms,
-            "navigation_mode": "live_session" if reused_session else "replay",
+            "navigation_mode": "live_session"
+            if reused_session
+            else "in_session_restore",
             "screen": {
                 "name": states[destination_id].screen_name,
                 "purpose": states[destination_id].purpose,
@@ -1007,7 +994,7 @@ def main() -> int:
                 latency_ms,
                 states[destination_id].screenshot,
                 states[actual_source_id].screen_name,
-                states[actual_source_id].path + [asdict(action)],
+                current_path,
                 observable_effects,
             )
         )

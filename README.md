@@ -13,7 +13,7 @@ App Tester is an open-source, local-first desktop application for autonomous And
 - Android Platform Tools lookup through `APP_TESTER_ADB`, Android SDK environment variables, common SDK locations, and `PATH`.
 - A small JSON CLI for diagnostics and automation.
 - Safety-gated local-model exploration using Qwen3-0.6B, with versioned state and transition evidence.
-- Session-aware depth-first navigation that stays in the current flow and replays only for branch restoration or recovery.
+- Session-aware depth-first navigation that never force-stops or relaunches the target application.
 - A semantic action ledger that prevents tabs and ordinary controls from being re-tested when timers or list content create a new state fingerprint.
 - Local-model discovery and representative sampling of repeated collection variants without user configuration or a fixed status taxonomy.
 - Local semantic screen summaries and flow-stage classification.
@@ -88,7 +88,7 @@ python3 scripts/local_model_scan.py \
 
 The scanner captures screenshots and UI hierarchies, fingerprints states, discovers clickable actions, blocks deterministic high-risk language, asks the local model only to rank remaining safe actions, validates its JSON response, and records every transition under `scan-results/`. Scan results are ignored by Git because they can contain private application data. After launching a selected application, the desktop Live Scan screen can start this local worker and stream its progress.
 
-For graph-based exploration with replay, scrolling, checkpoint persistence, deterministic issue analysis, and an agent report:
+For graph-based exploration with in-session branch navigation, scrolling, checkpoint persistence, deterministic issue analysis, and an agent report:
 
 ```bash
 python3 scripts/autonomous_scan.py \
@@ -99,7 +99,7 @@ python3 scripts/autonomous_scan.py \
   --max-minutes 15
 ```
 
-Newly reached screens are explored depth-first in the existing app session. A branch is restored from the authenticated application root and replayed with semantic selectors only when the desired source screen is no longer open. The local model records a short screen name, purpose, flow stage, and confidence for every state.
+Newly reached screens are explored depth-first in the existing app session. The scanner attaches to the application already open in the foreground. To reach another branch it uses the Android back stack and semantic actions inside that same process. If a branch cannot be reached without leaving the target application, it is skipped; the scanner never force-stops or relaunches the app. The local model records a short screen name, purpose, flow stage, and confidence for every state.
 
 Target-process logcat is correlated with the action and screen active at the time. Recognized JSON/DTO parsing failures include the parser/DTO name, redacted curl, redacted response evidence, timestamp, screen, and navigation path when those values were actually logged by the application. StrictMode reports include the screen, triggering action, navigation path, timestamp, and stack excerpt. Secrets in authorization, cookie, API-key, token, password, and session fields are redacted. Missing network evidence is explicitly reported rather than inferred.
 
@@ -107,7 +107,7 @@ The scan directory contains `checkpoint.json`, `graph.json`, `graph.mmd`, `trans
 
 Repeated collections are sampled by semantic variant discovered from the visible card context while navigating. The local model assigns stable collection and variant labels from badges, status text, capabilities, and content shape; users do not configure names such as completed or upcoming. The scanner tests one representative per discovered variant and action role and records equivalent skipped actions in `sampling.json`. Controls are considered effective when the scanner observes a UI hierarchy change, foreground activity change, network request, external navigation, or runtime incident.
 
-For non-collection controls, tested identity is based on feature scope, semantic screen name, control role, and label rather than the raw state hash or bounds. A queued action may be retargeted to the current equivalent semantic screen, avoiding a replay to an obsolete timer/list snapshot.
+For non-collection controls, tested identity is based on feature scope, semantic screen name, control role, and label rather than the raw state hash or bounds. A queued action may be retargeted to the current equivalent semantic screen, avoiding navigation back to an obsolete timer/list snapshot.
 
 `agent_report.md` is created only when at least one issue exists. It contains issue packets—not general scan inventory—with the symptom, likely causes, reproduction path, evidence, and developer next steps. Issue-free runs have no `agent_report.md`; their non-issue coverage data remains in the machine-readable scan artifacts.
 

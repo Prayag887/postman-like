@@ -249,6 +249,13 @@ class NavigationTests(unittest.TestCase):
             self.assertIn("Developer next steps", report)
             self.assertNotIn("Screen catalog", report)
 
+    def test_scanner_has_no_target_app_restart_commands(self):
+        scanner = (
+            Path(__file__).resolve().parents[1] / "autonomous_scan.py"
+        ).read_text()
+        self.assertNotIn('"force-stop"', scanner)
+        self.assertNotIn('"am", "start"', scanner)
+
 
 if __name__ == "__main__":
     unittest.main()
