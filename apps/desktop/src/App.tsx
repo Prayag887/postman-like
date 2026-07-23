@@ -104,7 +104,7 @@ export function App() {
           </button>
         </div>
         <nav aria-label="Workflow">
-          <button className="active">
+          <button className="active" aria-current="step">
             <span>1</span> Device
           </button>
           <button disabled>
@@ -147,8 +147,8 @@ export function App() {
               with QR code
             </p>
           </div>
-          <button disabled title="QR pairing is the next implementation slice">
-            Show pairing QR
+          <button disabled title="QR pairing is not implemented yet">
+            Coming soon
           </button>
         </section>
 
