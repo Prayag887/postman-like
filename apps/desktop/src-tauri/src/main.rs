@@ -1,3 +1,3 @@
 fn main() {
-    apiqa_desktop_lib::run();
+    app_tester_desktop_lib::run();
 }

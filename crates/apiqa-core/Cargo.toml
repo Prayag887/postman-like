@@ -1,24 +1,11 @@
 [package]
-name = "apiqa-core"
+name = "androidqa-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-anyhow.workspace = true
-chrono.workspace = true
-reqwest.workspace = true
-regex.workspace = true
-rusqlite.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-sha2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-url.workspace = true
-uuid.workspace = true
-zstd.workspace = true
 
 [dev-dependencies]
-tempfile = "3.24.0"
-wiremock = "0.6.5"

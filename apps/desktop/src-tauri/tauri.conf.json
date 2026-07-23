@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "APIQA",
-  "version": "1.4.0",
-  "identifier": "dev.prayag.apiqa",
+  "productName": "App Tester",
+  "version": "0.1.0",
+  "identifier": "dev.prayag.apptester",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,12 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "APIQA",
+        "title": "App Tester",
         "width": 1320,
         "height": 840,
-        "minWidth": 980,
+        "minWidth": 760,
         "minHeight": 620,
-        "backgroundColor": "#0b0b0d"
+        "backgroundColor": "#09100f"
       }
     ],
     "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost" }
@@ -26,7 +26,7 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "shortDescription": "Time-travel QA for APIs",
-    "longDescription": "Import Postman collections, automate API runs, and compare response history to catch regressions."
+    "shortDescription": "Local autonomous QA for Android applications",
+    "longDescription": "Explore Android applications safely, record reproducible issues, and export agent-ready QA reports."
   }
 }

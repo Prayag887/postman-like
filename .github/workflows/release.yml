@@ -52,11 +52,11 @@ jobs:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
           tagName: v__VERSION__
-          releaseName: APIQA v__VERSION__
-          releaseBody: Installers for macOS (Apple Silicon and Intel), Windows, and Linux. APIQA stores all API data locally and imports Postman Collection v2.0/v2.1 files.
+          releaseName: App Tester v__VERSION__
+          releaseBody: Installers for macOS (Apple Silicon and Intel), Windows, and Linux. App Tester is local-first and sends no telemetry.
           releaseDraft: false
           prerelease: false
           generateReleaseNotes: true
           args: ${{ matrix.args }}
           retryAttempts: 2
-          releaseAssetNamePattern: "APIQA_[version]_[platform]_[arch].[ext]"
+          releaseAssetNamePattern: "App_Tester_[version]_[platform]_[arch].[ext]"

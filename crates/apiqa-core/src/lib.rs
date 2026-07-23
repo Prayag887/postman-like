@@ -1,18 +1,268 @@
-mod bundle;
-mod compare;
-mod engine;
-mod import;
-mod model;
-mod report;
-mod storage;
+//! Core Android device discovery for App Tester.
+//!
+//! All interaction with ADB is kept behind [`AdbRunner`] so parsing and failure
+//! behaviour can be tested without a connected phone.
 
-pub use bundle::{
-    ProjectBundle, WorkspaceBundle, export_project, export_workspace, import_project,
-    import_workspace,
-};
-pub use compare::{ComparisonOptions, compare_responses};
-pub use engine::ApiQaEngine;
-pub use import::{import_postman, import_postman_environment};
-pub use model::*;
-pub use report::{html_report, json_report, junit_report};
-pub use storage::Store;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionType {
+    Usb,
+    Wireless,
+    Emulator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthorizationStatus {
+    Authorized,
+    Unauthorized,
+    Offline,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AndroidDevice {
+    pub serial: String,
+    pub connection_type: ConnectionType,
+    pub authorization_status: AuthorizationStatus,
+    pub model: Option<String>,
+    pub android_version: Option<String>,
+    pub api_level: Option<u32>,
+    pub resolution: Option<String>,
+    pub density: Option<u32>,
+    pub architecture: Option<String>,
+    pub product: Option<String>,
+}
+
+#[derive(Debug, Error)]
+pub enum DeviceError {
+    #[error(
+        "Android Platform Tools were not found. Install them or set ANDROID_HOME/ANDROID_SDK_ROOT."
+    )]
+    AdbNotFound,
+    #[error("failed to start ADB at {path}: {message}")]
+    Start { path: PathBuf, message: String },
+    #[error("ADB failed: {0}")]
+    Adb(String),
+    #[error("ADB returned non-UTF-8 output")]
+    InvalidOutput,
+}
+
+pub trait AdbRunner: Send + Sync {
+    fn run(&self, args: &[&str]) -> Result<String, DeviceError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessAdb {
+    path: PathBuf,
+}
+
+impl ProcessAdb {
+    pub fn discover() -> Result<Self, DeviceError> {
+        discover_adb_path()
+            .map(|path| Self { path })
+            .ok_or(DeviceError::AdbNotFound)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AdbRunner for ProcessAdb {
+    fn run(&self, args: &[&str]) -> Result<String, DeviceError> {
+        let output = Command::new(&self.path)
+            .args(args)
+            .output()
+            .map_err(|error| DeviceError::Start {
+                path: self.path.clone(),
+                message: error.to_string(),
+            })?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(DeviceError::Adb(if message.is_empty() {
+                format!("command exited with {}", output.status)
+            } else {
+                message
+            }));
+        }
+        String::from_utf8(output.stdout).map_err(|_| DeviceError::InvalidOutput)
+    }
+}
+
+pub fn discover_adb_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("APP_TESTER_ADB") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let executable = if cfg!(windows) { "adb.exe" } else { "adb" };
+    for variable in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if let Some(root) = std::env::var_os(variable) {
+            let candidate = PathBuf::from(root).join("platform-tools").join(executable);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        let root = PathBuf::from(home);
+        for candidate in [
+            root.join("Library/Android/sdk/platform-tools")
+                .join(executable),
+            root.join("Android/Sdk/platform-tools").join(executable),
+        ] {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|directory| directory.join(executable))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+pub fn list_devices(runner: &dyn AdbRunner) -> Result<Vec<AndroidDevice>, DeviceError> {
+    let output = runner.run(&["devices", "-l"])?;
+    parse_device_list(&output)
+        .into_iter()
+        .map(|mut device| {
+            if device.authorization_status == AuthorizationStatus::Authorized {
+                enrich_device(runner, &mut device);
+            }
+            device
+        })
+        .collect::<Vec<_>>()
+        .pipe(Ok)
+}
+
+fn enrich_device(runner: &dyn AdbRunner, device: &mut AndroidDevice) {
+    let serial = device.serial.as_str();
+    device.android_version = property(runner, serial, "ro.build.version.release");
+    device.api_level =
+        property(runner, serial, "ro.build.version.sdk").and_then(|v| v.parse().ok());
+    device.architecture = property(runner, serial, "ro.product.cpu.abi");
+    device.model = device
+        .model
+        .take()
+        .or_else(|| property(runner, serial, "ro.product.model"));
+    device.resolution = runner
+        .run(&["-s", serial, "shell", "wm", "size"])
+        .ok()
+        .and_then(|value| {
+            value
+                .lines()
+                .last()?
+                .split_once(':')
+                .map(|(_, v)| v.trim().to_owned())
+        });
+    device.density = runner
+        .run(&["-s", serial, "shell", "wm", "density"])
+        .ok()
+        .and_then(|value| value.lines().last()?.split_once(':')?.1.trim().parse().ok());
+}
+
+fn property(runner: &dyn AdbRunner, serial: &str, name: &str) -> Option<String> {
+    runner
+        .run(&["-s", serial, "shell", "getprop", name])
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn parse_device_list(output: &str) -> Vec<AndroidDevice> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty() && !line.starts_with("List of devices") && !line.starts_with('*')
+        })
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let serial = fields.next()?.to_owned();
+            let state = fields.next().unwrap_or("unknown");
+            let metadata = fields
+                .filter_map(|field| field.split_once(':'))
+                .collect::<std::collections::HashMap<_, _>>();
+            Some(AndroidDevice {
+                connection_type: classify_connection(&serial),
+                authorization_status: match state {
+                    "device" => AuthorizationStatus::Authorized,
+                    "unauthorized" => AuthorizationStatus::Unauthorized,
+                    "offline" => AuthorizationStatus::Offline,
+                    _ => AuthorizationStatus::Unknown,
+                },
+                model: metadata.get("model").map(|value| value.replace('_', " ")),
+                product: metadata.get("product").map(|value| (*value).to_owned()),
+                serial,
+                android_version: None,
+                api_level: None,
+                resolution: None,
+                density: None,
+                architecture: None,
+            })
+        })
+        .collect()
+}
+
+pub fn classify_connection(serial: &str) -> ConnectionType {
+    if serial.starts_with("emulator-") {
+        ConnectionType::Emulator
+    } else if serial.contains(':') {
+        ConnectionType::Wireless
+    } else {
+        ConnectionType::Usb
+    }
+}
+
+trait Pipe: Sized {
+    fn pipe<T>(self, function: impl FnOnce(Self) -> T) -> T {
+        function(self)
+    }
+}
+impl<T> Pipe for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_and_classifies_adb_devices() {
+        let output = "List of devices attached\n\
+emulator-5554 device product:sdk_gphone64_arm64 model:sdk_gphone64_arm64 transport_id:1\n\
+192.168.1.7:37099 device product:oriole model:Pixel_6 transport_id:2\n\
+R58M123 unauthorized usb:1-1 product:x model:Galaxy_S22\n\
+deadbeef offline\n";
+        let devices = parse_device_list(output);
+        assert_eq!(devices.len(), 4);
+        assert_eq!(devices[0].connection_type, ConnectionType::Emulator);
+        assert_eq!(devices[1].connection_type, ConnectionType::Wireless);
+        assert_eq!(devices[2].connection_type, ConnectionType::Usb);
+        assert_eq!(devices[2].model.as_deref(), Some("Galaxy S22"));
+        assert_eq!(
+            devices[2].authorization_status,
+            AuthorizationStatus::Unauthorized
+        );
+        assert_eq!(
+            devices[3].authorization_status,
+            AuthorizationStatus::Offline
+        );
+    }
+
+    #[test]
+    fn ignores_daemon_noise_and_headers() {
+        let output = "* daemon started successfully\nList of devices attached\n\n";
+        assert!(parse_device_list(output).is_empty());
+    }
+}

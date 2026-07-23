@@ -1,66 +1,83 @@
-# APIQA
+# App Tester
 
-APIQA is a local-first, cross-platform API quality-assurance client. Import a Postman collection, run its requests serially, retain response history, and compare current behavior with an earlier baseline.
+App Tester is an open-source, local-first desktop application for autonomous Android QA. It is being built to explore an authenticated Android application safely, preserve evidence, and produce reproducible reports for coding agents.
 
-## What you can do
+> Early development release: device discovery is working. Autonomous scanning and reports are not implemented yet.
 
-- Import Postman Collection v2.0/v2.1 files and Postman environments.
-- View and edit imported collection/environment variables, including separate Postman environment files.
-- Paste cURL commands directly into the request URL field to populate the entire request without executing shell code.
-- Browse collections and endpoints in a Postman-style tree, edit requests in place, and copy a live cURL command.
-- Author, edit, and safely delete HTTP requests with variables, bodies, authentication, assertions, and response extraction preserved from imports.
-- Share a complete workspace through a portable `.apiqa-workspace` file; secret-like environment values are removed automatically.
-- Send an individual request and inspect its response without leaving the editor.
-- Run complete collections serially and pass extracted values into later requests.
-- Compare status, headers, JSON structure and values, text, and response timing with any retained baseline.
-- Keep 7–90 days of compressed, de-duplicated history, with optional storage limits and protected pinned baselines.
-- Export HTML, JSON, and JUnit automation reports, with deterministic CLI exit codes for CI.
-- Move projects between machines with `.apiqa` files that omit secret-like environment values.
+## Implemented
 
-## Install
+- Native Tauri 2 desktop shell with a Rust backend and accessible React UI.
+- Automatic discovery of USB devices, wireless ADB devices, and Android Studio emulators.
+- Device authorization/offline status.
+- Device model, Android version, API level, resolution, density, and CPU architecture.
+- Android Platform Tools lookup through `APP_TESTER_ADB`, Android SDK environment variables, common SDK locations, and `PATH`.
+- A small JSON CLI for diagnostics and automation.
+- Unit tests for ADB output parsing and connection classification.
+- macOS, Windows, and Linux CI; release packaging for macOS Apple Silicon/Intel, Windows, and Linux.
 
-Download the installer for your platform from [GitHub Releases](https://github.com/Prayag887/postman-like/releases):
+## Privacy
 
-- macOS Apple Silicon or Intel: `.dmg`
-- Windows: setup `.exe`
-- Linux (Debian, Ubuntu, and derivatives): `.deb`
+App Tester does not use a cloud account or telemetry. The current device-discovery flow invokes the local `adb` executable and does not upload device or application data.
 
-On first launch, import a Postman collection, choose an optional environment, and select **Run collection**. The first run is your baseline; later runs show exactly which endpoints changed. Use Settings to select the history window.
+## Connect a device
+
+Install Android Platform Tools, or install Android Studio and its Android SDK.
+
+- USB: enable Developer options and USB debugging, connect the phone, and accept its authorization prompt.
+- Emulator: start an Android Studio emulator before opening App Tester.
+- Previously paired wireless device: connect it with ADB; App Tester classifies `host:port` serials as wireless.
+
+Android 11+ QR pairing and pairing-code fallback are part of the next product slice; the disabled UI control is intentionally labeled and does not claim to work.
 
 ## Development
 
-Requirements: Rust 1.96+, Node 24+, pnpm 11+, and the platform prerequisites for Tauri 2.
+Requirements: Rust 1.96+, Node 24+, pnpm 11+, Android Platform Tools, and the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 pnpm install
-pnpm dev
+pnpm --dir apps/desktop tauri dev
 ```
 
-Run all checks:
+Run the complete current validation:
 
 ```bash
-pnpm check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+pnpm --dir apps/desktop check
+pnpm --dir apps/desktop build
 ```
 
-The desktop application uses the shared Rust engine in `crates/apiqa-core`. The companion CLI in `apps/cli` uses the same engine.
-
-## Data and privacy
-
-APIQA stores projects and response history locally. Authorization and cookie headers are redacted before persistence. No telemetry is sent.
-
-Project exports intentionally blank variable names containing `token`, `secret`, `password`, or `api_key`. Review any report or project before sharing it because request and response bodies may still contain business-sensitive data.
-
-## CLI automation
+List devices from the CLI:
 
 ```bash
-cargo run -p apiqa -- import collection.json
-cargo run -p apiqa -- run COLLECTION_ID --environment ENVIRONMENT_ID --report-dir reports
-cargo run -p apiqa -- export-project COLLECTION_ID team-project.apiqa
-cargo run -p apiqa -- diagnostics
+cargo run -p app-tester
 ```
 
-Run exit codes are `0` for unchanged, `2` for response changes, `3` for assertion failures, and `4` for transport failures.
+To use a specific ADB binary:
 
-## Release builds
+```bash
+APP_TESTER_ADB=/absolute/path/to/adb cargo run -p app-tester
+```
 
-Push a version tag such as `v1.4.0`. GitHub Actions builds and publishes native artifacts for macOS (Apple Silicon and Intel), Windows, and Linux. The default workflow creates unsigned community builds. Before commercial distribution, add a separate signed release job using the Apple notarization and Windows code-signing credentials described by Tauri's platform guides.
+## Roadmap (not yet implemented)
+
+- Secure Android 11+ wireless QR pairing and pairing-code fallback.
+- Application/APK selection, launch, and manual login handoff.
+- Persistent, safety-aware state/action exploration.
+- UI hierarchy capture, screenshots, scrolling, replay, and recovery.
+- Deterministic crash, ANR, navigation, loading, layout, accessibility, and form analyzers.
+- Live graph and scan progress.
+- Versioned scan bundles and `agent_report.md`.
+- Optional tiny local model for constrained semantic classification.
+- Android fixture application and emulator integration tests.
+
+Do not treat roadmap items as available functionality.
+
+## Releases
+
+Tags matching `v*` trigger native artifacts for macOS Apple Silicon, macOS Intel, Windows, and Linux. Community builds are unsigned until signing and notarization credentials are configured.
+
+## License
+
+MIT. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
