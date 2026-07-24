@@ -73,6 +73,7 @@ pub enum DeviceError {
 
 pub trait AdbRunner: Send + Sync {
     fn run(&self, args: &[&str]) -> Result<String, DeviceError>;
+    fn push(&self, local: &Path, remote: &str) -> Result<String, DeviceError>;
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +97,27 @@ impl AdbRunner for ProcessAdb {
     fn run(&self, args: &[&str]) -> Result<String, DeviceError> {
         let output = Command::new(&self.path)
             .args(args)
+            .output()
+            .map_err(|error| DeviceError::Start {
+                path: self.path.clone(),
+                message: error.to_string(),
+            })?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(DeviceError::Adb(if message.is_empty() {
+                format!("command exited with {}", output.status)
+            } else {
+                message
+            }));
+        }
+        String::from_utf8(output.stdout).map_err(|_| DeviceError::InvalidOutput)
+    }
+
+    fn push(&self, local: &Path, remote: &str) -> Result<String, DeviceError> {
+        let output = Command::new(&self.path)
+            .args(["push"])
+            .arg(local)
+            .arg(remote)
             .output()
             .map_err(|error| DeviceError::Start {
                 path: self.path.clone(),

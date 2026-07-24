@@ -2,6 +2,7 @@ use crate::{AdbRunner, DeviceError};
 use qrcode::{QrCode, render::svg};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -27,6 +28,39 @@ pub struct QrPairingChallenge {
 pub struct QrPairingResult {
     pub endpoint: String,
     pub adb_output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AndroidCertificateInstall {
+    pub remote_path: String,
+    pub installer_output: String,
+}
+
+pub fn prepare_certificate_install(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    certificate_path: &Path,
+) -> Result<AndroidCertificateInstall, DeviceError> {
+    if !certificate_path.is_file() {
+        return Err(DeviceError::Adb(
+            "local CA certificate was not found".into(),
+        ));
+    }
+    let remote_path = "/sdcard/Download/AppTester-HTTPS-CA.pem";
+    runner.push(certificate_path, remote_path)?;
+    let installer_output = runner.run(&[
+        "-s",
+        serial,
+        "shell",
+        "am",
+        "start",
+        "-a",
+        "android.credentials.INSTALL",
+    ])?;
+    Ok(AndroidCertificateInstall {
+        remote_path: remote_path.into(),
+        installer_output: installer_output.trim().to_owned(),
+    })
 }
 
 pub fn pair_with_code(
@@ -280,6 +314,9 @@ studio-app-tester-123 _adb-tls-pairing._tcp 192.168.1.4:42891\n";
         struct Unused;
         impl AdbRunner for Unused {
             fn run(&self, _: &[&str]) -> Result<String, DeviceError> {
+                panic!("validation should run before ADB")
+            }
+            fn push(&self, _: &Path, _: &str) -> Result<String, DeviceError> {
                 panic!("validation should run before ADB")
             }
         }

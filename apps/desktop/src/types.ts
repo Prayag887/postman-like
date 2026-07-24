@@ -43,3 +43,4 @@ export interface QrPairingChallenge {
   id: string; service_name: string; qr_payload: string; qr_svg: string; expires_at: string;
 }
 export interface QrPairingResult { endpoint: string; adb_output: string }
+export interface AndroidCertificateInstall { remote_path: string; installer_output: string }

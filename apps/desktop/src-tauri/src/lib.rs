@@ -1,6 +1,6 @@
 use androidqa_core::{
     AndroidApp, AndroidDevice, ProcessAdb, android,
-    android::{QrPairingChallenge, QrPairingResult, QrPairingSecret},
+    android::{AndroidCertificateInstall, QrPairingChallenge, QrPairingResult, QrPairingSecret},
     events::InspectorEvent,
     launch_app, list_devices, list_third_party_apps,
     persistence::Database,
@@ -111,6 +111,24 @@ async fn enable_usb_wifi(serial: String, port: Option<u16>) -> Result<QrPairingR
     })
     .await
     .map_err(|error| format!("USB Wi-Fi task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn prepare_android_certificate_install(
+    state: tauri::State<'_, InspectorState>,
+    serial: String,
+) -> Result<AndroidCertificateInstall, String> {
+    let certificate_path = state.proxy.configuration().ca_certificate_path.clone();
+    if !certificate_path.exists() {
+        generate_ca(&state.ca_directory).map_err(|error| error.to_string())?;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let adb = ProcessAdb::discover().map_err(|error| error.to_string())?;
+        android::prepare_certificate_install(&adb, &serial, &certificate_path)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("certificate setup task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -276,6 +294,7 @@ pub fn run() {
             finish_qr_pairing,
             pair_with_code,
             enable_usb_wifi,
+            prepare_android_certificate_install,
             start_proxy,
             stop_proxy,
             restart_proxy,

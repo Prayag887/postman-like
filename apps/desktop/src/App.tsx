@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Activity, Cable, Circle, Copy, KeyRound, Pause, Play, QrCode, Search, Settings, ShieldCheck, Square, Wifi, X } from "lucide-react";
 import * as api from "./api";
-import type { AndroidApp, AndroidDevice, BodyStorage, HttpTransaction, ProxyStatus, QrPairingChallenge } from "./types";
+import type { AndroidApp, AndroidCertificateInstall, AndroidDevice, BodyStorage, HttpTransaction, ProxyStatus, QrPairingChallenge } from "./types";
 
 type InspectorTab = "Overview" | "Request" | "Response" | "Compare" | "cURL" | "Logs" | "Timeline";
 export const duration = (tx: HttpTransaction) => tx.timing.response_complete_ms == null ? undefined :
@@ -47,6 +47,7 @@ export function App() {
   const [pairingCode, setPairingCode] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState("");
+  const [certificateInstall, setCertificateInstall] = useState<AndroidCertificateInstall>();
 
   useEffect(() => {
     void api.getProxyStatus().then(setProxy);
@@ -76,10 +77,13 @@ export function App() {
 
   async function start() {
     try {
-      if (proxy === "certificate_required") { const ca = await api.generateCa(); setNotice(`CA generated: ${ca.fingerprint_sha256}`); }
+      await api.startProxy();
       if (device) await api.configureAndroidProxy(device, "10.0.2.2", 8080);
-      await api.startProxy(); setCapturing(true); setNotice("Capture active. Navigate the Android app manually.");
-    } catch (error) { setNotice(String(error)); }
+      setCapturing(true); setNotice("Capture active. Navigate the Android app manually.");
+    } catch (error) {
+      if (String(error).includes("CA certificate")) await setupHttpsCapture();
+      else setNotice(String(error));
+    }
   }
   async function stop() {
     await api.stopProxy(); setCapturing(false);
@@ -126,6 +130,15 @@ export function App() {
     } catch (error) { setConnectionError(String(error)); }
     finally { setConnecting(false); }
   }
+  async function setupHttpsCapture() {
+    if (!device) { setNotice("Select an authorized Android device before setting up HTTPS capture."); return; }
+    setConnecting(true); setConnectionError("");
+    try {
+      const install = await api.prepareAndroidCertificateInstall(device);
+      setCertificateInstall(install);
+    } catch (error) { setConnectionError(String(error)); setNotice(String(error)); }
+    finally { setConnecting(false); }
+  }
   function copy(value: string) { void navigator.clipboard.writeText(value); setNotice("Copied to clipboard"); }
 
   return <main className="shell">
@@ -138,6 +151,7 @@ export function App() {
       <button className="qr-trigger" onClick={()=>void pairWithQr()}><QrCode/>Connect via QR</button>
       <button onClick={()=>{setConnectionError(""); setCodePairingOpen(true);}}><KeyRound/>Pair with code</button>
       <button onClick={()=>{setConnectionError(""); setUsbWifiOpen(true);}}><Cable/>USB to Wi-Fi</button>
+      <button onClick={()=>void setupHttpsCapture()}><ShieldCheck/>HTTPS setup</button>
       <select aria-label="Package" value={packageName} onChange={e=>setPackageName(e.target.value)}>
         <option value="">Select package</option>{apps.map(app=><option key={app.package_name}>{app.package_name}</option>)}
       </select>
@@ -220,6 +234,16 @@ export function App() {
         <p className="warning">Keep the device and this Mac on the same network. Disconnecting USB after the wireless connection succeeds is safe.</p>
         {connectionError && <p className="connection-error">{connectionError}</p>}
         <button className="primary submit" disabled={connecting || !device} onClick={()=>void submitUsbWifi()}>{connecting ? "Connecting…" : "Enable Wi-Fi connection"}</button>
+      </section>
+    </div>}
+    {certificateInstall && <div className="modal-backdrop" role="presentation">
+      <section className="qr-dialog connection-dialog" role="dialog" aria-modal="true" aria-labelledby="certificate-title">
+        <button className="close" aria-label="Close" onClick={()=>setCertificateInstall(undefined)}><X/></button>
+        <div className="qr-heading"><ShieldCheck/><div><h2 id="certificate-title">Finish HTTPS capture setup</h2><p>One required Android security confirmation</p></div></div>
+        <p>App Tester generated the local certificate, copied it to your device, and opened Android’s credential installer.</p>
+        <ol><li>Choose <b>CA certificate</b> if Android asks for a credential type.</li><li>Select <b>AppTester-HTTPS-CA.pem</b> from Downloads.</li><li>Confirm the Android warning, then return here.</li></ol>
+        <p className="warning">Android requires this approval so no desktop app can silently add a certificate that could inspect encrypted traffic.</p>
+        <button className="primary submit" onClick={()=>{setCertificateInstall(undefined); void start();}}>I installed it — start capture</button>
       </section>
     </div>}
   </main>;

@@ -7,6 +7,8 @@
 5. Start capture and navigate the app manually.
 6. Stop capture to flush state and clear proxy configuration.
 
+The fastest route is **HTTPS setup**: it generates and transfers the local CA automatically, then opens Android's installer. Confirm the one Android security prompt and return to App Tester to start capture.
+
 The app never silently changes Android proxy settings. Emulator traffic normally reaches the host at `10.0.2.2`; physical devices need the host LAN address.
 
 If no traffic appears, do not assume no request occurred. Verify proxy configuration, certificate trust, app network-security configuration, pinning, QUIC/HTTP/3 bypass, and direct connections.
