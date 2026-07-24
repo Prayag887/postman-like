@@ -69,21 +69,67 @@ RISKY_WORDS = re.compile(
     re.IGNORECASE,
 )
 
+AUTHENTICATION_WORDS = re.compile(
+    r"\b(log[ -]?in|sign[ -]?in|sign[ -]?up|register|create account|"
+    r"forgot password|one[ -]?time password|otp|verify (?:email|phone))\b",
+    re.IGNORECASE,
+)
 
-def run_adb(serial: str, binary: str, *args: str, check: bool = True) -> str:
+
+def is_authentication_action(action: Action | dict[str, Any]) -> bool:
+    value = asdict(action) if isinstance(action, Action) else action
+    searchable = " ".join(
+        (str(value.get("label", "")), str(value.get("context", "")))
+    )
+    return bool(AUTHENTICATION_WORDS.search(searchable))
+
+
+def run_adb(
+    serial: str,
+    binary: str,
+    *args: str,
+    check: bool = True,
+    timeout: float = 15.0,
+) -> str:
     result = subprocess.run(
         [binary, "-s", serial, *args],
         capture_output=True,
         text=True,
         check=check,
+        timeout=timeout,
     )
     return result.stdout
 
 
 def dump_hierarchy(serial: str, binary: str) -> str:
-    remote = "/sdcard/app-tester-window.xml"
-    run_adb(serial, binary, "shell", "uiautomator", "dump", remote)
-    return run_adb(serial, binary, "shell", "cat", remote)
+    for attempt in range(2):
+        try:
+            hierarchy = run_adb(
+                serial,
+                binary,
+                "exec-out",
+                "uiautomator",
+                "dump",
+                "/dev/tty",
+                timeout=5.0,
+            )
+            start = hierarchy.find("<?xml")
+            end = hierarchy.rfind("</hierarchy>")
+            if start >= 0 and end >= start:
+                return hierarchy[start : end + len("</hierarchy>")]
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if attempt == 0:
+                run_adb(
+                    serial,
+                    binary,
+                    "shell",
+                    "pkill",
+                    "-f",
+                    "uiautomator",
+                    check=False,
+                    timeout=2.0,
+                )
+    raise RuntimeError("Android UI hierarchy capture failed twice")
 
 
 def wait_for_stability(serial: str, binary: str, timeout: float = 5.0) -> str:
@@ -94,7 +140,7 @@ def wait_for_stability(serial: str, binary: str, timeout: float = 5.0) -> str:
     while time.monotonic() < deadline:
         try:
             latest = dump_hierarchy(serial, binary)
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError):
             time.sleep(0.2)
             continue
         current = fingerprint(latest)
@@ -408,15 +454,55 @@ def navigate_in_session(
         if semantic_state_id(hierarchy, actions) == target_state_id:
             return True, hierarchy
     for selector in target_path[common:]:
+        if is_authentication_action(selector):
+            return False, hierarchy
         actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
         action = best_match(actions, selector)
         if action is None:
             return False, hierarchy
         perform_action(serial, binary, action)
-        hierarchy = wait_for_stability(serial, binary)
+        hierarchy = observe_after_action(serial, binary)
         if foreground_package(serial, binary) != package:
             return False, hierarchy
-    return True, hierarchy
+    actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
+    return semantic_state_id(hierarchy, actions) == target_state_id, hierarchy
+
+
+def recover_from_visible_root(
+    serial: str,
+    package: str,
+    binary: str,
+    root_state_id: str,
+    target_path: list[dict[str, Any]],
+    target_state_id: str,
+) -> tuple[bool, str, str, list[dict[str, Any]]]:
+    """Recover a clean navigation baseline and replay a route without relaunching."""
+    hierarchy = discover_visible_root(serial, package, binary)
+    actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
+    current_state_id = semantic_state_id(hierarchy, actions)
+    if current_state_id != root_state_id:
+        return False, hierarchy, current_state_id, []
+    if target_state_id == root_state_id:
+        return True, hierarchy, root_state_id, []
+
+    replayed: list[dict[str, Any]] = []
+    for selector in target_path:
+        if is_authentication_action(selector):
+            return False, hierarchy, root_state_id, replayed
+        actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
+        action = best_match(actions, selector)
+        if action is None:
+            return False, hierarchy, root_state_id, replayed
+        perform_action(serial, binary, action)
+        hierarchy = observe_after_action(serial, binary)
+        if foreground_package(serial, binary) != package:
+            return False, hierarchy, "", replayed
+        replayed.append(asdict(action))
+        actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
+        current_state_id = semantic_state_id(hierarchy, actions)
+        if current_state_id == target_state_id:
+            return True, hierarchy, target_state_id, replayed
+    return False, hierarchy, current_state_id, replayed
 
 
 def root_navigation_action(actions: list[Action]) -> Action | None:
@@ -431,9 +517,13 @@ def root_navigation_action(actions: list[Action]) -> Action | None:
     escape = next(
         (
             action
-            for label in ("close sheet", "close", "cancel", "back", "navigate up")
             for action in actions
-            if not action.selected and action.label.casefold() == label
+            if not action.selected
+            and (
+                action.label.casefold()
+                in {"close", "cancel", "dismiss", "back", "navigate up"}
+                or action.label.casefold().startswith("close ")
+            )
         ),
         None,
     )
@@ -997,6 +1087,8 @@ def main() -> int:
         for action in ordered:
             if action.risk != "safe" or RISKY_WORDS.search(action.label):
                 continue
+            if is_authentication_action(action):
+                continue
             if action.selected:
                 continue
             if is_immediate_loop(state.path, action):
@@ -1095,6 +1187,23 @@ def main() -> int:
                 current_hierarchy,
             )
             if not restored:
+                (
+                    restored,
+                    source_hierarchy,
+                    recovered_state_id,
+                    recovered_path,
+                ) = recover_from_visible_root(
+                    args.serial,
+                    args.package,
+                    args.adb,
+                    root_id,
+                    item.path,
+                    item.source_id,
+                )
+                current_state_id = recovered_state_id
+                current_hierarchy = source_hierarchy
+                current_path = recovered_path
+            if not restored:
                 if item.restore_attempts < 2:
                     item.restore_attempts += 1
                     frontier.append(item)
@@ -1111,7 +1220,6 @@ def main() -> int:
                     )
                     if item.semantic_key:
                         queued_semantic_actions.discard(item.semantic_key)
-                current_state_id = ""
                 continue
             current_state_id = item.source_id
             current_hierarchy = source_hierarchy

@@ -2,13 +2,17 @@ import unittest
 from collections import deque
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from autonomous_scan import (
     RepresentativeSampler,
     StateRecord,
     FrontierItem,
+    dump_hierarchy,
     is_immediate_loop,
+    is_authentication_action,
     pop_fair_frontier,
+    recover_from_visible_root,
     root_navigation_action,
     semantic_action_key,
     semantic_state_id,
@@ -392,6 +396,132 @@ class NavigationTests(unittest.TestCase):
         )
         self.assertIsNone(root_navigation_action([generic_exit]))
         self.assertEqual(root_navigation_action([quiz_exit]), quiz_exit)
+
+    def test_root_discovery_closes_named_overlays(self):
+        close_filter = Action(
+            0,
+            "Close filter",
+            "android.view.View",
+            "[0,0][100,100]",
+            50,
+            50,
+            "safe",
+        )
+        self.assertEqual(
+            root_navigation_action([close_filter]), close_filter
+        )
+
+    def test_authentication_routes_are_excluded(self):
+        login = Action(
+            0,
+            "Log in",
+            "android.view.View",
+            "[0,0][100,100]",
+            50,
+            50,
+            "safe",
+            context="Account access",
+        )
+        course = Action(
+            1,
+            "Browse Course",
+            "android.view.View",
+            "[0,100][100,200]",
+            50,
+            150,
+            "safe",
+        )
+        self.assertTrue(is_authentication_action(login))
+        self.assertFalse(is_authentication_action(course))
+
+    @patch("autonomous_scan.foreground_package", return_value="com.example")
+    @patch("autonomous_scan.observe_after_action")
+    @patch("autonomous_scan.perform_action")
+    @patch("autonomous_scan.discover_visible_root")
+    def test_failed_session_can_recover_from_root_and_replay_target_route(
+        self,
+        discover_root,
+        perform,
+        observe,
+        _foreground,
+    ):
+        root = """<hierarchy>
+  <node text="Study" class="android.view.View" clickable="true"
+        enabled="true" bounds="[0,0][100,100]" />
+</hierarchy>"""
+        destination = """<hierarchy>
+  <node text="Course details" class="android.widget.TextView"
+        clickable="false" enabled="true" bounds="[0,0][200,100]" />
+  <node text="Open lesson" class="android.view.View" clickable="true"
+        enabled="true" bounds="[0,100][200,200]" />
+</hierarchy>"""
+        discover_root.return_value = root
+        observe.return_value = destination
+        root_id = semantic_state_id(root, discover_actions(root))
+        target_id = semantic_state_id(
+            destination, discover_actions(destination)
+        )
+        restored, hierarchy, state_id, path = recover_from_visible_root(
+            "emulator",
+            "com.example",
+            "adb",
+            root_id,
+            [
+                {
+                    "label": "Study",
+                    "class_name": "android.view.View",
+                    "bounds": "[0,0][100,100]",
+                }
+            ],
+            target_id,
+        )
+        self.assertTrue(restored)
+        self.assertEqual(hierarchy, destination)
+        self.assertEqual(state_id, target_id)
+        self.assertEqual([step["label"] for step in path], ["Study"])
+        perform.assert_called_once()
+
+    @patch("autonomous_scan.discover_visible_root")
+    def test_root_recovery_rejects_a_stale_or_wrong_baseline(
+        self, discover_root
+    ):
+        expected_root = """<hierarchy>
+  <node text="Home" class="android.view.View" clickable="true"
+        enabled="true" bounds="[0,0][100,100]" />
+</hierarchy>"""
+        wrong_root = expected_root.replace("Home", "Trial purchase")
+        discover_root.return_value = wrong_root
+        restored, _, state_id, path = recover_from_visible_root(
+            "emulator",
+            "com.example",
+            "adb",
+            semantic_state_id(expected_root, discover_actions(expected_root)),
+            [],
+            "target",
+        )
+        self.assertFalse(restored)
+        self.assertNotEqual(state_id, "")
+        self.assertEqual(path, [])
+
+    @patch("autonomous_scan.run_adb")
+    def test_hierarchy_capture_retries_after_android_tooling_timeout(
+        self, run
+    ):
+        from subprocess import TimeoutExpired
+
+        run.side_effect = [
+            TimeoutExpired("adb", 5),
+            "",
+            (
+                "notice\n<?xml version='1.0'?><hierarchy></hierarchy>"
+                "\nUI hierarchy dumped to: /dev/tty"
+            ),
+        ]
+        self.assertEqual(
+            dump_hierarchy("emulator", "adb"),
+            "<?xml version='1.0'?><hierarchy></hierarchy>",
+        )
+        self.assertEqual(run.call_count, 3)
 
 
 if __name__ == "__main__":
