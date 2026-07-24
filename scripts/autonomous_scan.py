@@ -18,6 +18,7 @@ from typing import Any
 
 from local_model_scan import (
     Action,
+    FULL_DATE_LABEL,
     capture,
     discover_actions,
     fast_understand_screen,
@@ -286,6 +287,8 @@ def card_equivalence_key(
     if not label or class_name == "__scroll__" or not collection or not variant:
         return None
     action_role = re.sub(r"\s+", " ", label.casefold())
+    if collection == "calendar dates" and FULL_DATE_LABEL.fullmatch(label):
+        action_role = "<date>"
     return (
         f"{screen_name.casefold()}|{collection}|{class_name}|{variant}|{action_role}",
         variant,

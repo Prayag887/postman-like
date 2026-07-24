@@ -208,6 +208,37 @@ class NavigationTests(unittest.TestCase):
             ["Recorded archive", "Interactive room", "Waitlisted"],
         )
 
+    def test_calendar_samples_one_ordinary_date_and_today(self):
+        sampler = RepresentativeSampler()
+        actions = []
+        for index in range(1, 32):
+            prefix = "Today, " if index == 24 else ""
+            actions.append(
+                Action(
+                    index=index - 1,
+                    label=f"{prefix}Friday, July {index}, 2026",
+                    class_name="android.widget.TextView",
+                    bounds=f"[0,{index * 10}][100,{index * 10 + 9}]",
+                    x=50,
+                    y=index * 10 + 4,
+                    risk="safe",
+                )
+            )
+        variants = infer_contextual_action_variants(actions)
+        by_index = {item["action_index"]: item for item in variants}
+        accepted = [
+            action
+            for action in actions
+            if sampler.accept("Select date", action, by_index[action.index])
+        ]
+        self.assertEqual(
+            [action.label for action in accepted],
+            ["Friday, July 1, 2026", "Today, Friday, July 24, 2026"],
+        )
+        self.assertEqual(
+            sum(len(group["skipped"]) for group in sampler.records()), 29
+        )
+
     def test_any_safe_control_without_an_effect_is_reported(self):
         issues = transition_issues(
             "same",

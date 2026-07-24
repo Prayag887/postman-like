@@ -40,6 +40,11 @@ DYNAMIC_TEXT = re.compile(
     re.IGNORECASE,
 )
 BOUNDS = re.compile(r"\[(\d+),(\d+)]\[(\d+),(\d+)]")
+FULL_DATE_LABEL = re.compile(
+    r"^(?:today,\s*)?(?:monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday),\s+[a-z]+\s+\d{1,2},\s+\d{4}$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -191,14 +196,34 @@ def fingerprint(hierarchy: str) -> str:
 
 
 def infer_contextual_action_variants(actions: list[Action]) -> list[dict[str, Any]]:
+    inferred: list[dict[str, Any]] = []
+    calendar_dates = [
+        action for action in actions if FULL_DATE_LABEL.fullmatch(action.label)
+    ]
+    calendar_indices = {action.index for action in calendar_dates}
+    if len(calendar_dates) >= 4:
+        for action in calendar_dates:
+            inferred.append(
+                {
+                    "action_index": action.index,
+                    "collection": "calendar dates",
+                    "variant": (
+                        "today"
+                        if action.label.casefold().startswith("today,")
+                        else "selectable date"
+                    ),
+                }
+            )
+
     by_role: dict[tuple[str, str], list[Action]] = {}
     for action in actions:
+        if action.index in calendar_indices:
+            continue
         if not action.context or action.context == action.label:
             continue
         by_role.setdefault(
             (action.class_name, action.label.casefold()), []
         ).append(action)
-    inferred: list[dict[str, Any]] = []
     for (_, label), candidates in by_role.items():
         if len(candidates) < 2:
             continue
