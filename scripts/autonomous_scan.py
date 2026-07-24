@@ -18,6 +18,8 @@ from typing import Any
 
 from local_model_scan import (
     Action,
+    CALENDAR_MODE_LABEL,
+    CALENDAR_YEAR_LABEL,
     FULL_DATE_LABEL,
     capture,
     discover_actions,
@@ -289,6 +291,10 @@ def card_equivalence_key(
     action_role = re.sub(r"\s+", " ", label.casefold())
     if collection == "calendar dates" and FULL_DATE_LABEL.fullmatch(label):
         action_role = "<date>"
+    elif collection == "calendar years" and CALENDAR_YEAR_LABEL.fullmatch(label):
+        action_role = "<year>"
+    elif collection == "calendar mode" and CALENDAR_MODE_LABEL.fullmatch(label):
+        action_role = "<calendar-mode>"
     return (
         f"{screen_name.casefold()}|{collection}|{class_name}|{variant}|{action_role}",
         variant,

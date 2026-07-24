@@ -45,6 +45,12 @@ FULL_DATE_LABEL = re.compile(
     r"saturday|sunday),\s+[a-z]+\s+\d{1,2},\s+\d{4}$",
     re.IGNORECASE,
 )
+CALENDAR_YEAR_LABEL = re.compile(r"^Navigate to year \d{4}$", re.IGNORECASE)
+CALENDAR_MODE_LABEL = re.compile(
+    r"^[a-z]+\s+\d{4}\s+(?:Switch to selecting a year|"
+    r"Swipe to select a year, or tap to switch back to selecting a day)$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -215,6 +221,41 @@ def infer_contextual_action_variants(actions: list[Action]) -> list[dict[str, An
                 }
             )
 
+    calendar_years = [
+        action
+        for action in actions
+        if CALENDAR_YEAR_LABEL.fullmatch(action.label)
+    ]
+    calendar_indices.update(action.index for action in calendar_years)
+    if len(calendar_years) >= 3:
+        for action in calendar_years:
+            inferred.append(
+                {
+                    "action_index": action.index,
+                    "collection": "calendar years",
+                    "variant": "selectable year",
+                }
+            )
+
+    calendar_modes = [
+        action
+        for action in actions
+        if CALENDAR_MODE_LABEL.fullmatch(action.label)
+    ]
+    calendar_indices.update(action.index for action in calendar_modes)
+    for action in calendar_modes:
+        inferred.append(
+            {
+                "action_index": action.index,
+                "collection": "calendar mode",
+                "variant": (
+                    "open year picker"
+                    if "switch to selecting a year" in action.label.casefold()
+                    else "return to day picker"
+                ),
+            }
+        )
+
     by_role: dict[tuple[str, str], list[Action]] = {}
     for action in actions:
         if action.index in calendar_indices:
@@ -323,7 +364,7 @@ def fast_understand_screen(
         "flow_stage": flow_stage,
         "confidence": 70 if visible else 0,
         "evidence_anchors": visible[:8],
-        "action_variants": infer_contextual_action_variants(actions[:24]),
+        "action_variants": infer_contextual_action_variants(actions),
         "preferred_action_index": preferred,
         "engine": "fast_local_semantics",
     }
@@ -492,7 +533,7 @@ def understand_screen(
                         "variant": group[:80],
                     }
                 )
-        inferred_variants = infer_contextual_action_variants(actions[:24])
+        inferred_variants = infer_contextual_action_variants(actions)
         inferred_indices = {
             variant["action_index"] for variant in inferred_variants
         }
@@ -522,7 +563,7 @@ def understand_screen(
             "flow_stage": "unknown",
             "confidence": 0,
             "evidence_anchors": visible[:8],
-            "action_variants": infer_contextual_action_variants(actions[:24]),
+            "action_variants": infer_contextual_action_variants(actions),
             "preferred_action_index": -1,
             "validation_error": str(error),
             "raw_response": response,

@@ -239,6 +239,66 @@ class NavigationTests(unittest.TestCase):
             sum(len(group["skipped"]) for group in sampler.records()), 29
         )
 
+    def test_calendar_samples_only_one_year(self):
+        sampler = RepresentativeSampler()
+        actions = [
+            Action(
+                index=index,
+                label=f"Navigate to year {2023 + index}",
+                class_name="android.widget.TextView",
+                bounds=f"[0,{index * 10}][100,{index * 10 + 9}]",
+                x=50,
+                y=index * 10 + 4,
+                risk="safe",
+            )
+            for index in range(21)
+        ]
+        variants = infer_contextual_action_variants(actions)
+        by_index = {item["action_index"]: item for item in variants}
+        accepted = [
+            action
+            for action in actions
+            if sampler.accept("Select date", action, by_index[action.index])
+        ]
+        self.assertEqual(
+            [action.label for action in accepted],
+            ["Navigate to year 2023"],
+        )
+        self.assertEqual(
+            sum(len(group["skipped"]) for group in sampler.records()), 20
+        )
+
+    def test_calendar_classifies_dates_after_first_24_controls(self):
+        actions = [
+            Action(
+                index=index,
+                label=f"Control {index}",
+                class_name="android.view.View",
+                bounds=f"[0,{index}][100,{index + 1}]",
+                x=50,
+                y=index,
+                risk="safe",
+            )
+            for index in range(24)
+        ]
+        actions.extend(
+            Action(
+                index=24 + index,
+                label=f"Friday, July {index + 1}, 2023",
+                class_name="android.widget.TextView",
+                bounds=f"[0,{index + 30}][100,{index + 31}]",
+                x=50,
+                y=index + 30,
+                risk="safe",
+            )
+            for index in range(7)
+        )
+        variants = infer_contextual_action_variants(actions)
+        self.assertEqual(
+            {item["action_index"] for item in variants},
+            set(range(24, 31)),
+        )
+
     def test_any_safe_control_without_an_effect_is_reported(self):
         issues = transition_issues(
             "same",
