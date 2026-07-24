@@ -1,78 +1,45 @@
-export type ConnectionType = "usb" | "wireless" | "emulator";
-export type AuthorizationStatus =
-  "authorized" | "unauthorized" | "offline" | "unknown";
-
+export type ProxyStatus = "stopped" | "starting" | "running" | "certificate_required" |
+  "device_not_configured" | "partially_available" | "blocked_by_pinning" | "failed";
+export interface HeaderEntry { name: string; value: string }
+export interface QueryParameter { name: string; value: string }
+export type BodyStorage =
+  | { storage: "empty" }
+  | { storage: "inline"; bytes: number[] }
+  | { storage: "artifact"; artifact_id: string; preview: number[]; original_size: number }
+  | { storage: "truncated"; preview: number[]; original_size?: number }
+  | { storage: "unavailable"; reason: string };
+export interface CapturedRequest {
+  method: string; scheme: string; host: string; port?: number; path: string;
+  query: QueryParameter[]; headers: HeaderEntry[]; body: BodyStorage;
+  content_type?: string; http_version: string;
+}
+export interface CapturedResponse {
+  status: number; reason?: string; headers: HeaderEntry[]; body: BodyStorage;
+  content_type?: string; decoded_size: number; encoded_size: number; http_version: string;
+}
+export interface Difference {
+  kind: string; path?: string; previous?: string; current?: string;
+  severity: "critical" | "warning" | "informational"; ignored: boolean; explanation: string;
+}
+export interface HttpTransaction {
+  id: string; session_id: string; state: string; request: CapturedRequest;
+  response?: CapturedResponse; timing: {
+    request_started_ms: number; request_complete_ms?: number;
+    response_started_ms?: number; response_complete_ms?: number;
+  };
+  endpoint_identity?: { method: string; host: string; path_template: string };
+  curl?: { compact: string; multiline: string; redacted: boolean };
+  capture_quality: string;
+  comparison?: { compatibility: string; differences: Difference[] };
+  correlated_incidents: string[]; created_at: string; updated_at: string;
+}
 export interface AndroidDevice {
-  serial: string;
-  connection_type: ConnectionType;
-  authorization_status: AuthorizationStatus;
-  model?: string;
-  android_version?: string;
-  api_level?: number;
-  resolution?: string;
-  density?: number;
-  architecture?: string;
-  product?: string;
+  serial: string; connection_type: "usb" | "wireless" | "emulator";
+  authorization_status: "authorized" | "unauthorized" | "offline" | "unknown";
+  model?: string; android_version?: string; api_level?: number;
 }
-
-export interface AndroidApp {
-  package_name: string;
-  version_name?: string;
-  version_code?: number;
+export interface AndroidApp { package_name: string; version_name?: string; version_code?: number }
+export interface QrPairingChallenge {
+  id: string; service_name: string; qr_payload: string; qr_svg: string; expires_at: string;
 }
-
-export interface ScanSummary {
-  states_discovered: number;
-  actions_executed: number;
-  frontier_remaining: number;
-  complete: boolean;
-  issues: number;
-  equivalent_actions_skipped: number;
-  skipped_branches: number;
-  stop_reason: string;
-}
-
-export interface ModelDecision {
-  engine: string;
-  available: boolean;
-  cached?: boolean;
-  screen_type?: string;
-  purpose?: string;
-  preferred_action_label?: string | null;
-  reason: string;
-  latency_ms?: number;
-}
-
-export interface ScanIssue {
-  category: string;
-  severity: string;
-  title: string;
-  screen_name?: string;
-  occurred_at?: string;
-  evidence?: Record<string, unknown>;
-}
-
-export type ScanEvent =
-  | {
-      kind: "model_decision";
-      occurred_at: string;
-      state_id: string;
-      screen: string;
-      decision: ModelDecision;
-    }
-  | {
-      kind: "incident";
-      occurred_at: string;
-      issue: ScanIssue;
-    }
-  | {
-      kind: "transition";
-      occurred_at: string;
-      states: number;
-      transitions: number;
-      frontier: number;
-      mode: string;
-      screen: string;
-      action: string;
-      latency_ms: number;
-    };
+export interface QrPairingResult { endpoint: string; adb_output: string }

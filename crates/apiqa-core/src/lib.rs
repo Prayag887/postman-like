@@ -8,6 +8,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
 
+pub mod android;
+pub mod comparison;
+pub mod correlation;
+pub mod diagnostics;
+pub mod events;
+pub mod issues;
+pub mod persistence;
+pub mod proxy;
+pub mod session;
+pub mod traffic;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionType {

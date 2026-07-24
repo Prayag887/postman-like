@@ -1,26 +1,26 @@
 use androidqa_core::{
-    AndroidApp, AndroidDevice, ProcessAdb, launch_app, list_devices, list_third_party_apps,
+    AndroidApp, AndroidDevice, ProcessAdb, android,
+    android::{QrPairingChallenge, QrPairingResult, QrPairingSecret},
+    events::InspectorEvent,
+    launch_app, list_devices, list_third_party_apps,
+    persistence::Database,
+    proxy::{CertificateInfo, ProxyConfiguration, ProxyService, ProxyStatus, generate_ca},
+    traffic::HttpTransaction,
 };
-use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tauri::{Emitter, Manager};
+use uuid::Uuid;
 
-const SCAN_EVENT_PREFIX: &str = "@@SCAN_EVENT@@";
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ScanSummary {
-    states_discovered: usize,
-    actions_executed: usize,
-    frontier_remaining: usize,
-    complete: bool,
-    issues: usize,
-    #[serde(default)]
-    equivalent_actions_skipped: usize,
-    #[serde(default)]
-    skipped_branches: usize,
-    #[serde(default)]
-    stop_reason: String,
+struct InspectorState {
+    proxy: Arc<ProxyService>,
+    database: Arc<Database>,
+    session_id: Mutex<Option<Uuid>>,
+    ca_directory: std::path::PathBuf,
+    qr_pairings: Mutex<HashMap<Uuid, QrPairingSecret>>,
 }
 
 #[tauri::command]
@@ -54,132 +54,213 @@ async fn launch_installed_app(serial: String, package_name: String) -> Result<()
 }
 
 #[tauri::command]
-async fn run_autonomous_scan(
-    app: tauri::AppHandle,
-    serial: String,
-    package_name: String,
-) -> Result<ScanSummary, String> {
+fn begin_qr_pairing(state: tauri::State<'_, InspectorState>) -> Result<QrPairingChallenge, String> {
+    let (challenge, secret) = android::create_qr_pairing().map_err(|error| error.to_string())?;
+    state
+        .qr_pairings
+        .lock()
+        .map_err(|_| "QR pairing lock poisoned")?
+        .insert(challenge.id, secret);
+    Ok(challenge)
+}
+
+#[tauri::command]
+async fn finish_qr_pairing(
+    state: tauri::State<'_, InspectorState>,
+    pairing_id: Uuid,
+) -> Result<QrPairingResult, String> {
+    let secret = state
+        .qr_pairings
+        .lock()
+        .map_err(|_| "QR pairing lock poisoned")?
+        .remove(&pairing_id)
+        .ok_or_else(|| "QR pairing request was not found or already used".to_owned())?;
     tauri::async_runtime::spawn_blocking(move || {
         let adb = ProcessAdb::discover().map_err(|error| error.to_string())?;
-        let data_dir = app
-            .path()
-            .app_data_dir()
-            .map_err(|error| error.to_string())?;
-        let output = data_dir.join("scans").join(format!(
-            "{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|error| error.to_string())?
-                .as_secs()
-        ));
-        std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
-        let bundled = app
-            .path()
-            .resource_dir()
-            .map_err(|error| error.to_string())?
-            .join("scripts/autonomous_scan.py");
-        let development = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../scripts/autonomous_scan.py");
-        let script = if bundled.is_file() {
-            bundled
-        } else {
-            development
-        };
-        let python = if cfg!(target_os = "macos") {
-            [
-                "/opt/homebrew/bin/python3.11",
-                "/usr/local/bin/python3.11",
-                "python3",
-            ]
-            .into_iter()
-            .find(|candidate| candidate == &"python3" || std::path::Path::new(candidate).is_file())
-            .unwrap_or("python3")
-        } else if cfg!(windows) {
-            "python"
-        } else {
-            "python3"
-        };
-        let planner_cache = data_dir
-            .join("planner-cache")
-            .join(format!("{package_name}.json"));
-        let mut child = Command::new(python)
-            .arg(&script)
-            .args(["--serial", &serial, "--package", &package_name])
-            .args([
-                "--max-states",
-                "0",
-                "--max-actions",
-                "0",
-                "--max-minutes",
-                "120",
-            ])
-            .arg("--adb")
-            .arg(adb.path())
-            .arg("--output")
-            .arg(&output)
-            .arg("--planner-cache")
-            .arg(&planner_cache)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| format!("failed to start local scanner: {error}"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "local scanner stdout was unavailable".to_owned())?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| "local scanner stderr was unavailable".to_owned())?;
-        let stderr_app = app.clone();
-        let stderr_thread = std::thread::spawn(move || {
-            let mut captured = Vec::new();
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let _ = stderr_app.emit("scan-progress", format!("model: {line}"));
-                captured.push(line);
+        loop {
+            match android::finish_qr_pairing(&adb, &secret).map_err(|error| error.to_string())? {
+                Some(result) => return Ok(result),
+                None => std::thread::sleep(Duration::from_millis(500)),
             }
-            captured.join("\n")
-        });
-        for line in BufReader::new(stdout).lines() {
-            let line = line.map_err(|error| error.to_string())?;
-            if let Some(payload) = line.strip_prefix(SCAN_EVENT_PREFIX)
-                && let Ok(event) = serde_json::from_str::<serde_json::Value>(payload)
-            {
-                app.emit("scan-event", event)
-                    .map_err(|error| error.to_string())?;
-                continue;
-            }
-            app.emit("scan-progress", &line)
-                .map_err(|error| error.to_string())?;
         }
-        let status = child.wait().map_err(|error| error.to_string())?;
-        let stderr = stderr_thread
-            .join()
-            .map_err(|_| "scanner stderr reader panicked".to_owned())?;
-        if !status.success() {
-            return Err(format!("local scanner failed: {}", stderr.trim()));
-        }
-        let summary_path = output.join("summary.json");
-        let summary: ScanSummary = serde_json::from_slice(
-            &std::fs::read(&summary_path).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
-        app.emit("scan-completed", output.display().to_string())
-            .map_err(|error| error.to_string())?;
-        Ok(summary)
     })
     .await
-    .map_err(|error| format!("scan task failed: {error}"))?
+    .map_err(|error| format!("QR pairing task failed: {error}"))?
+}
+
+#[tauri::command]
+fn get_proxy_status(state: tauri::State<'_, InspectorState>) -> ProxyStatus {
+    state.proxy.status()
+}
+#[tauri::command]
+fn get_proxy_configuration(state: tauri::State<'_, InspectorState>) -> ProxyConfiguration {
+    state.proxy.configuration().clone()
+}
+#[tauri::command]
+fn generate_ca_certificate(
+    state: tauri::State<'_, InspectorState>,
+) -> Result<CertificateInfo, String> {
+    generate_ca(&state.ca_directory).map_err(|error| error.to_string())
+}
+#[tauri::command]
+async fn start_proxy(state: tauri::State<'_, InspectorState>) -> Result<String, String> {
+    let session_id = state
+        .session_id
+        .lock()
+        .map_err(|_| "session lock poisoned")?
+        .unwrap_or_else(Uuid::new_v4);
+    *state
+        .session_id
+        .lock()
+        .map_err(|_| "session lock poisoned")? = Some(session_id);
+    state
+        .proxy
+        .start(session_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(session_id.to_string())
+}
+#[tauri::command]
+async fn stop_proxy(state: tauri::State<'_, InspectorState>) -> Result<(), String> {
+    state.proxy.stop().await;
+    Ok(())
+}
+#[tauri::command]
+async fn restart_proxy(state: tauri::State<'_, InspectorState>) -> Result<String, String> {
+    state.proxy.stop().await;
+    start_proxy(state).await
+}
+#[tauri::command]
+async fn configure_android_proxy(serial: String, host: String, port: u16) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let adb = ProcessAdb::discover().map_err(|e| e.to_string())?;
+        android::configure_proxy(&adb, &serial, &host, port).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn clear_android_proxy(serial: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let adb = ProcessAdb::discover().map_err(|e| e.to_string())?;
+        android::clear_proxy(&adb, &serial).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn verify_android_proxy(serial: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let adb = ProcessAdb::discover().map_err(|e| e.to_string())?;
+        android::verify_proxy(&adb, &serial).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn list_transactions(
+    state: tauri::State<'_, InspectorState>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<HttpTransaction>, String> {
+    let Some(session_id) = *state
+        .session_id
+        .lock()
+        .map_err(|_| "session lock poisoned")?
+    else {
+        return Ok(vec![]);
+    };
+    state
+        .database
+        .list_transactions(session_id, limit.unwrap_or(250), offset.unwrap_or(0))
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+fn get_transaction(
+    state: tauri::State<'_, InspectorState>,
+    id: Uuid,
+) -> Result<Option<HttpTransaction>, String> {
+    state
+        .database
+        .get_transaction(id)
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+fn approve_baseline(
+    state: tauri::State<'_, InspectorState>,
+    endpoint_id: String,
+    transaction_id: Uuid,
+) -> Result<(), String> {
+    state
+        .database
+        .approve_baseline(&endpoint_id, transaction_id)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            let data_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&data_dir)?;
+            let database = Arc::new(Database::open(data_dir.join("inspector.sqlite"))?);
+            let events = androidqa_core::events::EventBroadcaster::default();
+            let ca_directory = data_dir.join("certificate-authority");
+            let proxy = Arc::new(ProxyService::new(
+                ProxyConfiguration {
+                    bind_address: "0.0.0.0".into(),
+                    port: 8080,
+                    ca_certificate_path: ca_directory.join("app-tester-ca.pem"),
+                    ca_fingerprint_sha256: None,
+                },
+                database.clone(),
+                events.clone(),
+            ));
+            let mut receiver = events.subscribe();
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while let Ok(event) = receiver.recv().await {
+                    let name = match &event {
+                        InspectorEvent::ProxyStatusChanged(_) => "proxy-status-changed",
+                        InspectorEvent::SessionStatusChanged(_) => "session-status-changed",
+                        InspectorEvent::TransactionCreated(_) => "transaction-created",
+                        InspectorEvent::TransactionUpdated(_) => "transaction-updated",
+                        InspectorEvent::TransactionCompleted(_) => "transaction-completed",
+                        InspectorEvent::ComparisonCompleted { .. } => "comparison-completed",
+                        InspectorEvent::IncidentCreated(_) => "incident-created",
+                        InspectorEvent::IssueCreated(_) => "issue-created",
+                        InspectorEvent::DeviceStatusChanged(_) => "device-status-changed",
+                    };
+                    let _ = handle.emit(name, event);
+                }
+            });
+            app.manage(InspectorState {
+                proxy,
+                database,
+                session_id: Mutex::new(None),
+                ca_directory,
+                qr_pairings: Mutex::new(HashMap::new()),
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             discover_devices,
             list_installed_apps,
             launch_installed_app,
-            run_autonomous_scan
+            begin_qr_pairing,
+            finish_qr_pairing,
+            start_proxy,
+            stop_proxy,
+            restart_proxy,
+            get_proxy_status,
+            get_proxy_configuration,
+            generate_ca_certificate,
+            configure_android_proxy,
+            clear_android_proxy,
+            verify_android_proxy,
+            list_transactions,
+            get_transaction,
+            approve_baseline
         ])
         .run(tauri::generate_context!())
         .expect("failed to start App Tester");

@@ -25,15 +25,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": {
-      "../../../scripts/autonomous_scan.py": "scripts/autonomous_scan.py",
-      "../../../scripts/local_model_scan.py": "scripts/local_model_scan.py",
-      "../../../scripts/ui_venus_planner.py": "scripts/ui_venus_planner.py",
-      "../../../scripts/runtime_diagnostics.py": "scripts/runtime_diagnostics.py",
-      "../../../scripts/requirements-local-model.txt": "scripts/requirements-local-model.txt"
-    },
+    "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"],
     "category": "DeveloperTool",
-    "shortDescription": "Local autonomous QA for Android applications",
-    "longDescription": "Explore Android applications safely, record reproducible issues, and export agent-ready QA reports."
+    "shortDescription": "Local Android traffic and runtime inspector",
+    "longDescription": "Inspect Android HTTP traffic, response regressions, and correlated runtime diagnostics locally."
   }
 }

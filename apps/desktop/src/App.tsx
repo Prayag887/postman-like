@@ -1,653 +1,190 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import {
-  ArrowLeft,
-  AppWindow,
-  Cable,
-  CircleHelp,
-  Moon,
-  MonitorSmartphone,
-  RefreshCw,
-  Search,
-  Smartphone,
-  Sun,
-  Wifi,
-} from "lucide-react";
-import {
-  discoverDevices,
-  launchInstalledApp,
-  listInstalledApps,
-  runAutonomousScan,
-} from "./api";
-import type {
-  AndroidApp,
-  AndroidDevice,
-  ConnectionType,
-  ScanEvent,
-  ScanSummary,
-} from "./types";
+import { Activity, Circle, Copy, Pause, Play, QrCode, Search, Settings, ShieldCheck, Square, Wifi, X } from "lucide-react";
+import * as api from "./api";
+import type { AndroidApp, AndroidDevice, BodyStorage, HttpTransaction, ProxyStatus, QrPairingChallenge } from "./types";
 
-const connectionIcon: Record<ConnectionType, typeof Cable> = {
-  usb: Cable,
-  wireless: Wifi,
-  emulator: MonitorSmartphone,
+type InspectorTab = "Overview" | "Request" | "Response" | "Compare" | "cURL" | "Logs" | "Timeline";
+export const duration = (tx: HttpTransaction) => tx.timing.response_complete_ms == null ? undefined :
+  tx.timing.response_complete_ms - tx.timing.request_started_ms;
+export const bodyText = (body?: BodyStorage) => {
+  if (!body || body.storage === "empty") return "";
+  if (body.storage === "unavailable") return body.reason;
+  const bytes = body.storage === "inline" ? body.bytes : body.preview;
+  return new TextDecoder().decode(new Uint8Array(bytes));
+};
+export const displayState = (tx: HttpTransaction) => {
+  if (!tx.response) return "Pending";
+  if (tx.response.status >= 400) return "Failed";
+  if (tx.comparison?.differences.some((difference) => !difference.ignored)) return "Changed";
+  return "Unchanged";
+};
+const jsonView = (value: string) => {
+  try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
 };
 
-export function platformLabel(device: AndroidDevice): string {
-  if (!device.android_version) return "Android version unavailable";
-  return `Android ${device.android_version}${
-    device.api_level ? ` · API ${device.api_level}` : ""
-  }`;
-}
-
-type Theme = "light" | "dark";
-
-export function resolveInitialTheme(
-  storedTheme: string | null,
-  prefersDark: boolean,
-): Theme {
-  if (storedTheme === "light" || storedTheme === "dark") return storedTheme;
-  return prefersDark ? "dark" : "light";
-}
-
-export function nextStepForDevice(
-  selectedSerial: string | undefined,
-): "device" | "application" {
-  return selectedSerial ? "application" : "device";
-}
-
-export function parseScanMetrics(
-  logs: string[],
-  summary?: ScanSummary,
-): { states: number; transitions: number; frontier: number } {
-  const latest = [...logs].reverse().find((line) => line.startsWith("states="));
-  const match = latest?.match(/states=(\d+) transitions=(\d+) frontier=(\d+)/);
-  return {
-    states: summary?.states_discovered ?? Number(match?.[1] ?? 0),
-    transitions: summary?.actions_executed ?? Number(match?.[2] ?? 0),
-    frontier: summary?.frontier_remaining ?? Number(match?.[3] ?? 0),
-  };
-}
-
-export function appendUniqueScanLog(current: string[], next: string): string[] {
-  return current.at(-1) === next ? current : [...current.slice(-99), next];
-}
-
 export function App() {
-  const [step, setStep] = useState<"device" | "application" | "live">("device");
+  const [transactions, setTransactions] = useState<HttpTransaction[]>([]);
+  const [selectedId, setSelectedId] = useState<string>();
+  const [proxy, setProxy] = useState<ProxyStatus>("stopped");
+  const [capturing, setCapturing] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [query, setQuery] = useState("");
+  const [changedOnly, setChangedOnly] = useState(false);
+  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [tab, setTab] = useState<InspectorTab>("Overview");
   const [devices, setDevices] = useState<AndroidDevice[]>([]);
-  const [selected, setSelected] = useState<string>();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>();
+  const [device, setDevice] = useState("");
   const [apps, setApps] = useState<AndroidApp[]>([]);
-  const [selectedApp, setSelectedApp] = useState<string>();
-  const [appSearch, setAppSearch] = useState("");
-  const [appsLoading, setAppsLoading] = useState(false);
-  const [launching, setLaunching] = useState(false);
-  const [appLaunched, setAppLaunched] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [scanLogs, setScanLogs] = useState<string[]>([]);
-  const [scanEvents, setScanEvents] = useState<ScanEvent[]>([]);
-  const [scanSummary, setScanSummary] = useState<ScanSummary>();
-  const [scanOutput, setScanOutput] = useState<string>();
-  const [theme, setTheme] = useState<Theme>(() =>
-    resolveInitialTheme(
-      localStorage.getItem("app-tester-theme"),
-      window.matchMedia("(prefers-color-scheme: dark)").matches,
-    ),
-  );
+  const [packageName, setPackageName] = useState("");
+  const [notice, setNotice] = useState("");
+  const [qrPairing, setQrPairing] = useState<QrPairingChallenge>();
+  const [qrStatus, setQrStatus] = useState<"waiting"|"paired"|"failed">("waiting");
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.style.colorScheme = theme;
-    localStorage.setItem("app-tester-theme", theme);
-  }, [theme]);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(undefined);
-    try {
-      const next = await discoverDevices();
-      setDevices(next);
-      setSelected((current) =>
-        next.some((device) => device.serial === current)
-          ? current
-          : next.find((device) => device.authorization_status === "authorized")
-              ?.serial,
-      );
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setLoading(false);
-    }
+    void api.getProxyStatus().then(setProxy);
+    void api.discoverDevices().then((items) => { setDevices(items); setDevice(items[0]?.serial ?? ""); });
+    const stops = [
+      listen<{payload: ProxyStatus}>("proxy-status-changed", e => setProxy(e.payload.payload)),
+      listen<{payload: HttpTransaction}>("transaction-created", e =>
+        setTransactions(current => [e.payload.payload, ...current])),
+      listen<{payload: HttpTransaction}>("transaction-updated", e =>
+        setTransactions(current => current.map(tx => tx.id === e.payload.payload.id ? e.payload.payload : tx))),
+      listen<{payload: HttpTransaction}>("transaction-completed", e =>
+        setTransactions(current => current.map(tx => tx.id === e.payload.payload.id ? e.payload.payload : tx))),
+    ];
+    return () => { void Promise.all(stops).then(unlisteners => unlisteners.forEach(stop => stop())); };
   }, []);
-
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!device) return;
+    void api.listInstalledApps(device).then(items => { setApps(items); setPackageName(items[0]?.package_name ?? ""); });
+  }, [device]);
 
-  const filteredApps = useMemo(() => {
-    const query = appSearch.trim().toLowerCase();
-    if (!query) return apps;
-    return apps.filter((app) => app.package_name.toLowerCase().includes(query));
-  }, [appSearch, apps]);
+  const visible = useMemo(() => transactions.filter(tx => {
+    const haystack = `${tx.request.method} ${tx.request.host} ${tx.request.path} ${tx.response?.status ?? ""}`.toLowerCase();
+    return haystack.includes(query.toLowerCase()) && (!changedOnly || displayState(tx) === "Changed") &&
+      (!errorsOnly || displayState(tx) === "Failed" || tx.correlated_incidents.length > 0);
+  }), [transactions, query, changedOnly, errorsOnly]);
+  const selected = transactions.find(tx => tx.id === selectedId) ?? visible[0];
 
-  async function continueToApplications() {
-    if (!selected) return;
-    setStep(nextStepForDevice(selected));
-    setAppsLoading(true);
-    setError(undefined);
+  async function start() {
     try {
-      const next = await listInstalledApps(selected);
-      setApps(next);
-      setSelectedApp((current) =>
-        next.some((app) => app.package_name === current)
-          ? current
-          : next[0]?.package_name,
-      );
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setAppsLoading(false);
+      if (proxy === "certificate_required") { const ca = await api.generateCa(); setNotice(`CA generated: ${ca.fingerprint_sha256}`); }
+      if (device) await api.configureAndroidProxy(device, "10.0.2.2", 8080);
+      await api.startProxy(); setCapturing(true); setNotice("Capture active. Navigate the Android app manually.");
+    } catch (error) { setNotice(String(error)); }
+  }
+  async function stop() {
+    await api.stopProxy(); setCapturing(false);
+    if (device) await api.clearAndroidProxy(device).catch(() => undefined);
+  }
+  async function pairWithQr() {
+    try {
+      setQrStatus("waiting");
+      const challenge = await api.beginQrPairing();
+      setQrPairing(challenge);
+      const result = await api.finishQrPairing(challenge.id);
+      setQrStatus("paired");
+      setNotice(`Wireless device paired at ${result.endpoint}`);
+      const items = await api.discoverDevices();
+      setDevices(items);
+      setDevice(items.find(item => item.connection_type === "wireless")?.serial ?? items[0]?.serial ?? "");
+    } catch (error) {
+      setQrStatus("failed");
+      setNotice(String(error));
     }
   }
+  function copy(value: string) { void navigator.clipboard.writeText(value); setNotice("Copied to clipboard"); }
 
-  async function launchSelectedApplication() {
-    if (!selected || !selectedApp) return;
-    setLaunching(true);
-    setError(undefined);
-    try {
-      await launchInstalledApp(selected, selectedApp);
-      setAppLaunched(true);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setLaunching(false);
-    }
-  }
-
-  async function startSafeScan() {
-    if (!selected || !selectedApp) return;
-    setStep("live");
-    setScanning(true);
-    setScanLogs([]);
-    setScanEvents([]);
-    setScanSummary(undefined);
-    setScanOutput(undefined);
-    setError(undefined);
-    const stopProgress = await listen<string>("scan-progress", (event) => {
-      setScanLogs((current) => appendUniqueScanLog(current, event.payload));
-    });
-    const stopCompleted = await listen<string>("scan-completed", (event) => {
-      setScanOutput(event.payload);
-    });
-    const stopEvents = await listen<ScanEvent>("scan-event", (event) => {
-      setScanEvents((current) => [...current.slice(-199), event.payload]);
-    });
-    try {
-      setScanSummary(await runAutonomousScan(selected, selectedApp));
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      stopProgress();
-      stopCompleted();
-      stopEvents();
-      setScanning(false);
-    }
-  }
-
-  const liveMetrics = useMemo(
-    () => parseScanMetrics(scanLogs, scanSummary),
-    [scanLogs, scanSummary],
-  );
-  const liveIncidents = scanEvents.filter(
-    (event): event is Extract<ScanEvent, { kind: "incident" }> =>
-      event.kind === "incident",
-  );
-  const latestDecision = [...scanEvents]
-    .reverse()
-    .find(
-      (event): event is Extract<ScanEvent, { kind: "model_decision" }> =>
-        event.kind === "model_decision",
-    );
-
-  return (
-    <div className="app-shell">
-      <aside>
-        <div className="brand">
-          <span className="brand-mark">
-            <Smartphone aria-hidden="true" />
-          </span>
-          <div>
-            <strong>App Tester</strong>
-            <small>Autonomous Android QA</small>
-          </div>
-          <button
-            className="theme-toggle"
-            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-            onClick={() =>
-              setTheme((current) => (current === "dark" ? "light" : "dark"))
-            }
-          >
-            {theme === "dark" ? (
-              <Sun aria-hidden="true" />
-            ) : (
-              <Moon aria-hidden="true" />
-            )}
-          </button>
+  return <main className="shell">
+    <header>
+      <div className="brand"><Activity/><strong>App Tester</strong><span>Android Inspector</span></div>
+      <div className={`proxy ${proxy}`}><Circle/>Proxy {proxy.replaceAll("_"," ")}</div>
+      <select aria-label="Device" value={device} onChange={e=>setDevice(e.target.value)}>
+        <option value="">Select device</option>{devices.map(item=><option key={item.serial}>{item.serial}</option>)}
+      </select>
+      <button className="qr-trigger" onClick={()=>void pairWithQr()}><QrCode/>Connect via QR</button>
+      <select aria-label="Package" value={packageName} onChange={e=>setPackageName(e.target.value)}>
+        <option value="">Select package</option>{apps.map(app=><option key={app.package_name}>{app.package_name}</option>)}
+      </select>
+      {capturing ? <button className="danger" onClick={()=>void stop()}><Square/>Stop capture</button> :
+        <button className="primary" onClick={()=>void start()}><Play/>Start capture</button>}
+      <button title="Settings"><Settings/></button>
+    </header>
+    <section className="filters">
+      <label className="search"><Search/><input placeholder="Search method, host, path, status…" value={query} onChange={e=>setQuery(e.target.value)}/></label>
+      <button className={changedOnly?"active":""} onClick={()=>setChangedOnly(v=>!v)}>Changed only</button>
+      <button className={errorsOnly?"active":""} onClick={()=>setErrorsOnly(v=>!v)}>Errors only</button>
+      <button onClick={()=>setPaused(v=>!v)}>{paused?<Play/>:<Pause/>}{paused?"Resume":"Pause"} UI</button>
+      <span className="count">{visible.length} requests</span>
+    </section>
+    {notice && <div className="notice">{notice}</div>}
+    <section className="workspace">
+      <div className="traffic">
+        <div className="table-head"><span>Time</span><span>Method</span><span>Host / Path</span><span>Status</span><span>Duration</span><span>Size</span><span>Change</span><span>Issues</span></div>
+        <div className="rows">
+          {visible.map(tx => <button key={tx.id} onClick={()=>setSelectedId(tx.id)}
+            className={`row ${selected?.id===tx.id?"selected":""} ${displayState(tx).toLowerCase()}`}>
+            <span>{new Date(tx.created_at).toLocaleTimeString([], {hour12:false})}</span>
+            <b className={`method ${tx.request.method.toLowerCase()}`}>{tx.request.method}</b>
+            <span className="target"><strong>{tx.request.host}</strong><small>{tx.request.path}</small></span>
+            <span>{tx.response?.status ?? "—"}</span><span>{duration(tx) == null ? "Pending" : `${duration(tx)} ms`}</span>
+            <span>{tx.response ? `${tx.response.decoded_size} B` : "—"}</span>
+            <span className="change">{displayState(tx)}</span><span>{tx.correlated_incidents.length || "—"}</span>
+          </button>)}
+          {!visible.length && <div className="empty"><ShieldCheck/><strong>No captured traffic yet</strong>
+            <span>{proxy==="running"?"Navigate the selected Android app manually.":"Start capture and configure the device proxy to see requests live."}</span></div>}
         </div>
-        <nav aria-label="Workflow">
-          <button
-            className={step === "device" ? "active" : ""}
-            aria-current={step === "device" ? "step" : undefined}
-            onClick={() => setStep("device")}
-          >
-            <span>1</span> Device
-          </button>
-          <button
-            className={step === "application" ? "active" : ""}
-            aria-current={step === "application" ? "step" : undefined}
-            disabled={!selected}
-            onClick={() => void continueToApplications()}
-          >
-            <span>2</span> Application
-          </button>
-          <button
-            className={step === "live" ? "active" : ""}
-            aria-current={step === "live" ? "step" : undefined}
-            disabled={!appLaunched}
-            onClick={() => setStep("live")}
-          >
-            <span>3</span> Live scan
-          </button>
-          <button disabled>
-            <span>4</span> Results
-          </button>
-        </nav>
-        <p className="privacy">
-          Local-only. No telemetry. Your app data stays here.
-        </p>
+      </div>
+      <aside className="inspector">
+        {selected ? <><div className="inspector-title"><div><b>{selected.request.method}</b><strong>{selected.request.host}{selected.request.path}</strong></div>
+          <button onClick={()=>copy(`${selected.request.scheme}://${selected.request.host}${selected.request.path}`)}><Copy/>URL</button></div>
+          <nav>{(["Overview","Request","Response","Compare","cURL","Logs","Timeline"] as InspectorTab[]).map(name=>
+            <button className={tab===name?"active":""} onClick={()=>setTab(name)} key={name}>{name}</button>)}</nav>
+          <div className="panel">{tab==="Overview" && <Overview tx={selected}/>}
+            {tab==="Request" && <Message headers={selected.request.headers} body={bodyText(selected.request.body)} onCopy={copy}/>}
+            {tab==="Response" && <Message headers={selected.response?.headers ?? []} body={bodyText(selected.response?.body)} onCopy={copy}/>}
+            {tab==="Compare" && <Compare tx={selected}/>}
+            {tab==="cURL" && <Code value={selected.curl?.multiline ?? "cURL is generated when the request is captured."} onCopy={copy}/>}
+            {tab==="Logs" && <div className="empty compact">Only developer-actionable logs correlated with this request appear here.</div>}
+            {tab==="Timeline" && <Timeline tx={selected}/>}</div>
+        </> : <div className="empty"><Activity/><strong>Select a request</strong><span>Request, response, comparison, cURL and correlated logs will appear here.</span></div>}
       </aside>
-
-      {step === "device" ? (
-        <main>
-          <header>
-            <div>
-              <p className="eyebrow">SETUP · DEVICE</p>
-              <h1>Choose an Android device</h1>
-              <p className="subtitle">
-                Connect over USB, use a running emulator, or pair securely over
-                Wi-Fi.
-              </p>
-            </div>
-            <button className="secondary" onClick={() => void refresh()}>
-              <RefreshCw className={loading ? "spin" : ""} aria-hidden="true" />
-              Refresh
-            </button>
-          </header>
-
-          <section className="pair-card">
-            <div className="pair-icon">
-              <Wifi aria-hidden="true" />
-            </div>
-            <div>
-              <h2>Pair wirelessly</h2>
-              <p>
-                Android 11+ · Developer options → Wireless debugging → Pair
-                device with QR code
-              </p>
-            </div>
-            <button disabled title="QR pairing is not implemented yet">
-              Coming soon
-            </button>
-          </section>
-
-          <div className="section-title">
-            <h2>Available devices</h2>
-            <span>{devices.length}</span>
-          </div>
-
-          {error && (
-            <div className="error" role="alert">
-              <CircleHelp aria-hidden="true" />
-              <div>
-                <strong>Device discovery failed</strong>
-                <p>{error}</p>
-              </div>
-            </div>
-          )}
-
-          {!error && !loading && devices.length === 0 && (
-            <div className="empty">
-              <Smartphone aria-hidden="true" />
-              <h3>No Android devices found</h3>
-              <p>
-                Connect a phone with USB debugging enabled or start an Android
-                Studio emulator, then refresh.
-              </p>
-            </div>
-          )}
-
-          <div className="device-grid" role="radiogroup" aria-label="Devices">
-            {devices.map((device) => {
-              const Icon = connectionIcon[device.connection_type];
-              const isSelected = selected === device.serial;
-              const disabled = device.authorization_status !== "authorized";
-              return (
-                <button
-                  className={`device-card ${isSelected ? "selected" : ""}`}
-                  key={device.serial}
-                  role="radio"
-                  aria-checked={isSelected}
-                  disabled={disabled}
-                  onClick={() => setSelected(device.serial)}
-                >
-                  <Icon aria-hidden="true" />
-                  <div>
-                    <h3>{device.model ?? device.serial}</h3>
-                    <p>{device.serial}</p>
-                    <div className="metadata">
-                      <span>{device.connection_type}</span>
-                      {device.android_version && (
-                        <span>{platformLabel(device)}</span>
-                      )}
-                      {device.resolution && <span>{device.resolution}</span>}
-                      {device.architecture && (
-                        <span>{device.architecture}</span>
-                      )}
-                    </div>
-                  </div>
-                  <span className={`status ${device.authorization_status}`}>
-                    {device.authorization_status}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <footer>
-            <p>
-              {selected
-                ? "Device ready. Continue to choose an application."
-                : "Select an authorized device to continue."}
-            </p>
-            <button
-              disabled={!selected}
-              onClick={() => void continueToApplications()}
-            >
-              Continue
-            </button>
-          </footer>
-        </main>
-      ) : step === "application" ? (
-        <main>
-          <header>
-            <div>
-              <p className="eyebrow">SETUP · APPLICATION</p>
-              <h1>Choose an application</h1>
-              <p className="subtitle">
-                Select a third-party application installed on{" "}
-                {devices.find((device) => device.serial === selected)?.model ??
-                  selected}
-                .
-              </p>
-            </div>
-            <button className="secondary" onClick={() => setStep("device")}>
-              <ArrowLeft aria-hidden="true" />
-              Back
-            </button>
-          </header>
-
-          <label className="search-field">
-            <Search aria-hidden="true" />
-            <span>Search installed applications</span>
-            <input
-              type="search"
-              value={appSearch}
-              onChange={(event) => setAppSearch(event.target.value)}
-              placeholder="Package name"
-            />
-          </label>
-
-          <div className="section-title">
-            <h2>Installed applications</h2>
-            <span>{filteredApps.length}</span>
-          </div>
-
-          {error && (
-            <div className="error" role="alert">
-              <CircleHelp aria-hidden="true" />
-              <div>
-                <strong>Application action failed</strong>
-                <p>{error}</p>
-              </div>
-            </div>
-          )}
-
-          {!error && !appsLoading && apps.length === 0 && (
-            <div className="empty">
-              <AppWindow aria-hidden="true" />
-              <h3>No third-party applications found</h3>
-              <p>
-                Install an application on the selected device, then go back and
-                try again.
-              </p>
-            </div>
-          )}
-
-          {appsLoading ? (
-            <div className="loading-state" role="status">
-              <RefreshCw className="spin" aria-hidden="true" />
-              Reading installed applications…
-            </div>
-          ) : (
-            <div
-              className="app-list"
-              role="radiogroup"
-              aria-label="Installed applications"
-            >
-              {filteredApps.map((app) => (
-                <button
-                  className={`app-row ${selectedApp === app.package_name ? "selected" : ""}`}
-                  key={app.package_name}
-                  role="radio"
-                  aria-checked={selectedApp === app.package_name}
-                  onClick={() => setSelectedApp(app.package_name)}
-                >
-                  <AppWindow aria-hidden="true" />
-                  <span>
-                    <strong>{app.package_name}</strong>
-                    <small>
-                      {app.version_name
-                        ? `Version ${app.version_name}${app.version_code ? ` (${app.version_code})` : ""}`
-                        : "Version unavailable"}
-                    </small>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          <footer>
-            <p>
-              {selectedApp
-                ? "Launch the app, complete login manually, then return here."
-                : "Select an application to continue."}
-            </p>
-            <div className="footer-actions">
-              <button
-                className="secondary"
-                disabled={!selectedApp || launching}
-                onClick={() => void launchSelectedApplication()}
-              >
-                {launching ? "Launching…" : "Launch application"}
-              </button>
-              <button
-                disabled={!appLaunched}
-                onClick={() => void startSafeScan()}
-              >
-                Start safe scan
-              </button>
-            </div>
-          </footer>
-        </main>
-      ) : (
-        <main>
-          <header>
-            <div>
-              <p className="eyebrow">AUTONOMOUS QA · LIVE SCAN</p>
-              <h1>
-                {scanning
-                  ? "Exploring application"
-                  : scanSummary
-                    ? "Scan results"
-                    : "Ready to explore"}
-              </h1>
-              <p className="subtitle">
-                UI‑Venus plans once per new screen. Cached component and route
-                memory keep known screens fast while diagnostics stream live.
-              </p>
-            </div>
-            <button
-              className="secondary"
-              disabled={scanning}
-              onClick={() => setStep("application")}
-            >
-              <ArrowLeft aria-hidden="true" />
-              Applications
-            </button>
-          </header>
-
-          <section className="metrics" aria-label="Scan metrics">
-            <div>
-              <strong>{liveMetrics.states}</strong>
-              <span>States</span>
-            </div>
-            <div>
-              <strong>{liveMetrics.transitions}</strong>
-              <span>Transitions</span>
-            </div>
-            <div>
-              <strong>{liveMetrics.frontier}</strong>
-              <span>Frontier</span>
-            </div>
-            <div>
-              <strong>{scanSummary?.issues ?? liveIncidents.length}</strong>
-              <span>Issues</span>
-            </div>
-          </section>
-
-          <section className="live-intelligence" aria-live="polite">
-            <div>
-              <span>AI planner</span>
-              <strong>
-                {latestDecision
-                  ? latestDecision.decision.available
-                    ? "UI‑Venus 1.5 2B"
-                    : "Deterministic fallback"
-                  : scanning
-                    ? "Loading planner…"
-                    : "Ready"}
-              </strong>
-              {latestDecision && (
-                <p>
-                  {latestDecision.screen}:{" "}
-                  {latestDecision.decision.preferred_action_label ??
-                    "No action selected"}
-                  {latestDecision.decision.cached ? " · cached" : ""}
-                </p>
-              )}
-            </div>
-            <div>
-              <span>Live incidents</span>
-              <strong>{liveIncidents.length}</strong>
-              <p>
-                Parsing, StrictMode, navigation, and runtime failures appear
-                here as soon as they are observed.
-              </p>
-            </div>
-          </section>
-
-          {liveIncidents.length > 0 && (
-            <section className="incident-feed" aria-label="Live incidents">
-              <h2>Issues detected during this scan</h2>
-              {liveIncidents.slice(-6).reverse().map((event, index) => (
-                <article key={`${event.occurred_at}-${index}`}>
-                  <span>{event.issue.severity}</span>
-                  <div>
-                    <strong>{event.issue.title}</strong>
-                    <p>
-                      {event.issue.screen_name ?? "Unknown screen"} ·{" "}
-                      {event.issue.category}
-                    </p>
-                  </div>
-                </article>
-              ))}
-            </section>
-          )}
-
-          {error && (
-            <div className="error" role="alert">
-              <CircleHelp aria-hidden="true" />
-              <div>
-                <strong>Scan failed</strong>
-                <p>{error}</p>
-              </div>
-            </div>
-          )}
-
-          <section className="scan-console" aria-live="polite">
-            <div className="scan-console-title">
-              <span className={scanning ? "pulse-dot" : "complete-dot"} />
-              {scanning
-                ? "Local scanner running"
-                : scanSummary
-                  ? "Local scanner finished"
-                  : "Local scanner ready"}
-            </div>
-            <pre>
-              {scanLogs.length
-                ? scanLogs.join("\n")
-                : "Start a scan when the application is ready."}
-            </pre>
-          </section>
-
-          {scanSummary && (
-            <section className="scan-result">
-              <h2>
-                {scanSummary.complete
-                  ? "Reachable safe coverage exhausted"
-                  : scanSummary.stop_reason === "unreachable_branches"
-                    ? "Coverage incomplete: unreachable branches"
-                    : scanSummary.stop_reason === "safety_timeout"
-                      ? "Coverage paused by safety timeout"
-                      : "Coverage stopped before completion"}
-              </h2>
-              <p>
-                {scanSummary.issues} issues recorded.{" "}
-                {scanSummary.frontier_remaining} frontier actions remain.{" "}
-                {scanSummary.equivalent_actions_skipped} equivalent repeated
-                actions were skipped. {scanSummary.skipped_branches} unreachable
-                branches remain.
-              </p>
-              {scanOutput && scanSummary.issues > 0 && (
-                <code>{scanOutput}/agent_report.md</code>
-              )}
-            </section>
-          )}
-
-          <footer>
-            <p>
-              Scan evidence stays local and may contain private application
-              content.
-            </p>
-            <button disabled={scanning} onClick={() => void startSafeScan()}>
-              {scanSummary ? "Run another scan" : "Start safe scan"}
-            </button>
-          </footer>
-        </main>
-      )}
-    </div>
-  );
+    </section>
+    {qrPairing && <div className="modal-backdrop" role="presentation">
+      <section className="qr-dialog" role="dialog" aria-modal="true" aria-labelledby="qr-title">
+        <button className="close" aria-label="Close" onClick={()=>setQrPairing(undefined)}><X/></button>
+        <div className="qr-heading"><Wifi/><div><h2 id="qr-title">Connect Android over Wi-Fi</h2>
+          <p>Android 11 or newer · same Wi-Fi network</p></div></div>
+        {qrStatus==="waiting" ? <><div className="qr-image" dangerouslySetInnerHTML={{__html:qrPairing.qr_svg}}/>
+          <ol><li>Open <b>Settings → Developer options → Wireless debugging</b>.</li>
+            <li>Tap <b>Pair device with QR code</b>.</li><li>Scan this code with Android’s pairing scanner.</li></ol>
+          <div className="pairing-status"><span className="spinner"/>Waiting for the device…</div>
+          <small>Expires {new Date(qrPairing.expires_at).toLocaleTimeString()}. This QR grants ADB access; only scan it on a device you control.</small></> :
+          qrStatus==="paired" ? <div className="pair-result success"><ShieldCheck/><h3>Device connected</h3><p>The wireless device is now available in the device selector.</p>
+            <button className="primary" onClick={()=>setQrPairing(undefined)}>Done</button></div> :
+          <div className="pair-result failed"><Circle/><h3>Pairing failed</h3><p>{notice}</p><button onClick={()=>void pairWithQr()}>Generate a new QR</button></div>}
+      </section>
+    </div>}
+  </main>;
 }
+function Overview({tx}:{tx:HttpTransaction}) { return <div className="overview">
+  <label>Status<strong>{tx.response?.status ?? "Pending"}</strong></label><label>Duration<strong>{duration(tx) ?? "—"} ms</strong></label>
+  <label>Content type<strong>{tx.response?.content_type ?? tx.request.content_type ?? "Unknown"}</strong></label>
+  <label>HTTP<strong>{tx.response?.http_version ?? tx.request.http_version}</strong></label>
+  <label>Capture quality<strong>{tx.capture_quality}</strong></label><label>Change<strong className={displayState(tx)==="Changed"?"red":""}>{displayState(tx)}</strong></label>
+</div>; }
+function Message({headers,body,onCopy}:{headers:{name:string;value:string}[];body:string;onCopy:(v:string)=>void}) {
+  return <><h3>Headers <button onClick={()=>onCopy(headers.map(h=>`${h.name}: ${h.value}`).join("\n"))}><Copy/>Copy</button></h3>
+    <div className="headers">{headers.map((h,i)=><div key={`${h.name}-${i}`}><b>{h.name}</b><span>{h.value}</span></div>)}</div>
+    <h3>Body <button onClick={()=>onCopy(body)}><Copy/>Copy raw</button></h3><pre>{jsonView(body) || "No body"}</pre></>;
+}
+function Code({value,onCopy}:{value:string;onCopy:(v:string)=>void}) { return <div className="code"><button onClick={()=>onCopy(value)}><Copy/>Copy</button><pre>{value}</pre></div>; }
+function Compare({tx}:{tx:HttpTransaction}) { const diffs=tx.comparison?.differences ?? []; return <div>
+  <h3>{diffs.length ? `${diffs.length} differences` : "No compatible comparison available"}</h3>
+  {diffs.map((diff,i)=><article className={`diff ${diff.severity}`} key={i}><b>{diff.path ?? diff.kind}</b><span>{diff.explanation}</span>
+    <pre>Previous: {diff.previous ?? "—"}{"\n"}Current: {diff.current ?? "—"}</pre></article>)}</div>; }
+function Timeline({tx}:{tx:HttpTransaction}) { return <ol className="timeline">
+  <li>Request started <time>{new Date(tx.timing.request_started_ms).toLocaleTimeString()}</time></li>
+  {tx.timing.request_complete_ms&&<li>Request complete</li>}{tx.timing.response_started_ms&&<li>Response headers</li>}
+  {tx.timing.response_complete_ms&&<li>Response complete</li>}</ol>; }

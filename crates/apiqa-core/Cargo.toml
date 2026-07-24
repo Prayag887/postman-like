@@ -6,6 +6,28 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+sha2.workspace = true
+blake3.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+time.workspace = true
+rusqlite.workspace = true
+regex.workspace = true
+url.workspace = true
+bytes.workspace = true
+flate2.workspace = true
+brotli.workspace = true
+zstd.workspace = true
+tokio.workspace = true
+hudsucker.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+qrcode.workspace = true
+similar.workspace = true
+dashmap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
