@@ -40,6 +40,21 @@ pub struct LogIncident {
     pub occurred_at: OffsetDateTime,
 }
 
+/// Parses `adb logcat -v epoch` output into a focused line. Lines outside the
+/// expected format are ignored rather than being presented as actionable errors.
+pub fn parse_logcat_epoch_line(line: &str) -> Option<FocusedLogLine> {
+    let expression = Regex::new(
+        r"^\s*(?<timestamp>\d+(?:\.\d+)?)\s+\d+\s+\d+\s+(?<level>[VDIWEAF])\s+(?<tag>[^:]+):\s?(?<message>.*)$",
+    ).ok()?;
+    let captures = expression.captures(line)?;
+    Some(FocusedLogLine {
+        timestamp_ms: (captures.name("timestamp")?.as_str().parse::<f64>().ok()? * 1000.0) as i64,
+        level: captures.name("level")?.as_str().to_owned(),
+        tag: captures.name("tag")?.as_str().trim().to_owned(),
+        message: captures.name("message")?.as_str().to_owned(),
+    })
+}
+
 pub fn classify(message: &str) -> Option<(IncidentCategory, &'static str)> {
     let patterns = [
         (
@@ -164,6 +179,20 @@ mod tests {
         assert_eq!(
             normalize_signature(IncidentCategory::Crash, "user 12345", None),
             normalize_signature(IncidentCategory::Crash, "user 98765", None)
+        );
+    }
+
+    #[test]
+    fn parses_logcat_epoch_network_error() {
+        let line = parse_logcat_epoch_line(
+            "         1721932411.123 10491 10502 E TRuntime: javax.net.ssl.SSLHandshakeException: failed",
+        )
+        .unwrap();
+        assert_eq!(line.timestamp_ms, 1_721_932_411_123);
+        assert_eq!(line.tag, "TRuntime");
+        assert_eq!(
+            classify(&line.message).unwrap().0,
+            IncidentCategory::Network
         );
     }
 }

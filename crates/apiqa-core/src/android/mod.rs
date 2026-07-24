@@ -259,6 +259,22 @@ pub fn verify_proxy(runner: &dyn AdbRunner, serial: &str) -> Result<String, Devi
         .map(|value| value.trim().to_owned())
 }
 
+/// Resolves the Linux UID assigned to an installed package so logcat can be scoped to
+/// the app under test instead of collecting unrelated device noise.
+pub fn app_uid(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    package_name: &str,
+) -> Result<u32, DeviceError> {
+    let output = runner.run(&["-s", serial, "shell", "dumpsys", "package", package_name])?;
+    let expression = Regex::new(r"(?m)^\s*userId=(\d+)\s*$").expect("valid package UID regex");
+    expression
+        .captures(&output)
+        .and_then(|captures| captures.get(1))
+        .and_then(|uid| uid.as_str().parse().ok())
+        .ok_or_else(|| DeviceError::Adb(format!("could not determine UID for {package_name}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +340,20 @@ studio-app-tester-123 _adb-tls-pairing._tcp 192.168.1.4:42891\n";
         assert!(pair_with_code(&runner, "host;bad", 37123, "123456").is_err());
         assert!(pair_with_code(&runner, "192.168.1.5", 0, "123456").is_err());
         assert!(pair_with_code(&runner, "192.168.1.5", 37123, "abcdef").is_err());
+    }
+
+    #[test]
+    fn extracts_app_uid_from_package_dump() {
+        let output = "Packages:\n  Package [dev.example.app]:\n    userId=10129\n";
+        let expression = Regex::new(r"(?m)^\s*userId=(\d+)\s*$").unwrap();
+        assert_eq!(
+            expression
+                .captures(output)
+                .unwrap()
+                .get(1)
+                .unwrap()
+                .as_str(),
+            "10129"
+        );
     }
 }

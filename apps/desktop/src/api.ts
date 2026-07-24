@@ -7,6 +7,8 @@ export const launchInstalledApp = async (serial: string, packageName: string): P
 export const getProxyStatus = async (): Promise<ProxyStatus> => native() ? invoke("get_proxy_status") : "stopped";
 export const startProxy = async (): Promise<string> => invoke("start_proxy");
 export const stopProxy = async (): Promise<void> => invoke("stop_proxy");
+export const startLogcatCapture = async (serial:string, packageName:string):Promise<void> =>
+  invoke("start_logcat_capture", { serial, packageName });
 export const generateCa = async (): Promise<{certificate_path:string;fingerprint_sha256:string}> => invoke("generate_ca_certificate");
 export const configureAndroidProxy = async (serial:string, host:string,port:number):Promise<void> => invoke("configure_android_proxy",{serial,host,port});
 export const clearAndroidProxy = async (serial:string):Promise<void> => invoke("clear_android_proxy",{serial});

@@ -30,7 +30,7 @@ export interface HttpTransaction {
   endpoint_identity?: { method: string; host: string; path_template: string };
   curl?: { compact: string; multiline: string; redacted: boolean };
   capture_quality: string;
-  comparison?: { compatibility: string; differences: Difference[] };
+  comparison?: { baseline_transaction_id?: string; compatibility: string; differences: Difference[] };
   correlated_incidents: string[]; created_at: string; updated_at: string;
 }
 export interface AndroidDevice {
@@ -44,3 +44,7 @@ export interface QrPairingChallenge {
 }
 export interface QrPairingResult { endpoint: string; adb_output: string }
 export interface AndroidCertificateInstall { remote_path: string; installer_output: string }
+export interface LogIncident {
+  id: string; category: string; title: string; message: string; occurrence_count: number;
+  occurred_at: string; lines: { timestamp_ms:number; level:string; tag:string; message:string }[];
+}

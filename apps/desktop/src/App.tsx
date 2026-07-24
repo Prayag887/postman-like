@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Activity, Cable, Circle, Copy, KeyRound, Pause, Play, QrCode, Search, Settings, ShieldCheck, Square, Wifi, X } from "lucide-react";
 import * as api from "./api";
-import type { AndroidApp, AndroidCertificateInstall, AndroidDevice, BodyStorage, HttpTransaction, ProxyStatus, QrPairingChallenge } from "./types";
+import type { AndroidApp, AndroidCertificateInstall, AndroidDevice, BodyStorage, HttpTransaction, LogIncident, ProxyStatus, QrPairingChallenge } from "./types";
 
 type InspectorTab = "Overview" | "Request" | "Response" | "Compare" | "cURL" | "Logs" | "Timeline";
 export const duration = (tx: HttpTransaction) => tx.timing.response_complete_ms == null ? undefined :
@@ -16,6 +16,7 @@ export const bodyText = (body?: BodyStorage) => {
 export const displayState = (tx: HttpTransaction) => {
   if (!tx.response) return "Pending";
   if (tx.response.status >= 400) return "Failed";
+  if (!tx.comparison?.baseline_transaction_id) return "New";
   if (tx.comparison?.differences.some((difference) => !difference.ignored)) return "Changed";
   return "Unchanged";
 };
@@ -48,6 +49,7 @@ export function App() {
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState("");
   const [certificateInstall, setCertificateInstall] = useState<AndroidCertificateInstall>();
+  const [incidents, setIncidents] = useState<LogIncident[]>([]);
 
   useEffect(() => {
     void api.getProxyStatus().then(setProxy);
@@ -60,6 +62,11 @@ export function App() {
         setTransactions(current => current.map(tx => tx.id === e.payload.payload.id ? e.payload.payload : tx))),
       listen<{payload: HttpTransaction}>("transaction-completed", e =>
         setTransactions(current => current.map(tx => tx.id === e.payload.payload.id ? e.payload.payload : tx))),
+      listen<{payload: LogIncident}>("incident-created", e => {
+        const incident = e.payload.payload;
+        setIncidents(current => [incident, ...current].slice(0, 100));
+        setNotice(`Logcat: ${incident.title} — ${incident.message}`);
+      }),
     ];
     return () => { void Promise.all(stops).then(unlisteners => unlisteners.forEach(stop => stop())); };
   }, []);
@@ -79,6 +86,7 @@ export function App() {
     try {
       await api.startProxy();
       if (device) await api.configureAndroidProxy(device, "10.0.2.2", 8080);
+      if (device && packageName) await api.startLogcatCapture(device, packageName);
       setCapturing(true); setNotice("Capture active. Navigate the Android app manually.");
     } catch (error) {
       if (String(error).includes("CA certificate")) await setupHttpsCapture();
@@ -194,7 +202,7 @@ export function App() {
             {tab==="Response" && <Message headers={selected.response?.headers ?? []} body={bodyText(selected.response?.body)} onCopy={copy}/>}
             {tab==="Compare" && <Compare tx={selected}/>}
             {tab==="cURL" && <Code value={selected.curl?.multiline ?? "cURL is generated when the request is captured."} onCopy={copy}/>}
-            {tab==="Logs" && <div className="empty compact">Only developer-actionable logs correlated with this request appear here.</div>}
+            {tab==="Logs" && <Logs incidents={incidents}/>}
             {tab==="Timeline" && <Timeline tx={selected}/>}</div>
         </> : <div className="empty"><Activity/><strong>Select a request</strong><span>Request, response, comparison, cURL and correlated logs will appear here.</span></div>}
       </aside>
@@ -264,6 +272,10 @@ function Compare({tx}:{tx:HttpTransaction}) { const diffs=tx.comparison?.differe
   <h3>{diffs.length ? `${diffs.length} differences` : "No compatible comparison available"}</h3>
   {diffs.map((diff,i)=><article className={`diff ${diff.severity}`} key={i}><b>{diff.path ?? diff.kind}</b><span>{diff.explanation}</span>
     <pre>Previous: {diff.previous ?? "—"}{"\n"}Current: {diff.current ?? "—"}</pre></article>)}</div>; }
+function Logs({incidents}:{incidents:LogIncident[]}) { return incidents.length ? <div className="logs">{incidents.map(incident =>
+  <article className="log-incident" key={incident.id}><b>{incident.title}</b><span>{incident.message}</span>
+    {incident.lines.map((line, index)=><pre key={index}>{line.level} {line.tag}: {line.message}</pre>)}</article>)}</div> :
+  <div className="empty compact">No actionable logcat errors captured for the selected app yet.</div>; }
 function Timeline({tx}:{tx:HttpTransaction}) { return <ol className="timeline">
   <li>Request started <time>{new Date(tx.timing.request_started_ms).toLocaleTimeString()}</time></li>
   {tx.timing.request_complete_ms&&<li>Request complete</li>}{tx.timing.response_started_ms&&<li>Response headers</li>}

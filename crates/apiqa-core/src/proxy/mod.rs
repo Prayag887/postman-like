@@ -387,6 +387,9 @@ impl ProxyService {
     pub fn configuration(&self) -> &ProxyConfiguration {
         &self.config
     }
+    pub fn events(&self) -> EventBroadcaster {
+        self.events.clone()
+    }
     fn set_status(&self, status: ProxyStatus) {
         *self.status.lock().expect("proxy status lock") = status;
         self.events.send(InspectorEvent::ProxyStatusChanged(status));

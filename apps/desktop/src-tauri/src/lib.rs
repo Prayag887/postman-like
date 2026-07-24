@@ -13,6 +13,10 @@ use std::{
     time::Duration,
 };
 use tauri::{Emitter, Manager};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::Command,
+};
 use uuid::Uuid;
 
 struct InspectorState {
@@ -21,6 +25,7 @@ struct InspectorState {
     session_id: Mutex<Option<Uuid>>,
     ca_directory: std::path::PathBuf,
     qr_pairings: Mutex<HashMap<Uuid, QrPairingSecret>>,
+    logcat_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
 #[tauri::command]
@@ -163,8 +168,79 @@ async fn start_proxy(state: tauri::State<'_, InspectorState>) -> Result<String, 
         .map_err(|error| error.to_string())?;
     Ok(session_id.to_string())
 }
+
+#[tauri::command]
+async fn start_logcat_capture(
+    state: tauri::State<'_, InspectorState>,
+    serial: String,
+    package_name: String,
+) -> Result<(), String> {
+    if package_name.trim().is_empty() {
+        return Ok(());
+    }
+    let session_id = (*state
+        .session_id
+        .lock()
+        .map_err(|_| "session lock poisoned")?)
+    .ok_or_else(|| "start the proxy before starting log capture".to_owned())?;
+    let adb = ProcessAdb::discover().map_err(|error| error.to_string())?;
+    let uid = android::app_uid(&adb, &serial, &package_name).map_err(|error| error.to_string())?;
+    let mut previous = state
+        .logcat_task
+        .lock()
+        .map_err(|_| "logcat lock poisoned")?;
+    if let Some(task) = previous.take() {
+        task.abort();
+    }
+    let adb_path = adb.path().to_path_buf();
+    let events = state.proxy.events();
+    let task = tauri::async_runtime::spawn(async move {
+        let mut child = match Command::new(adb_path)
+            .args([
+                "-s",
+                &serial,
+                "logcat",
+                &format!("--uid={uid}"),
+                "-v",
+                "epoch",
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => return,
+        };
+        let Some(stdout) = child.stdout.take() else {
+            return;
+        };
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let Some(log_line) = androidqa_core::diagnostics::parse_logcat_epoch_line(&line) else {
+                continue;
+            };
+            if let Some(incident) = androidqa_core::diagnostics::parse_incident(
+                session_id,
+                &package_name,
+                vec![log_line],
+            ) {
+                events.send(InspectorEvent::IncidentCreated(incident));
+            }
+        }
+    });
+    *previous = Some(task);
+    Ok(())
+}
 #[tauri::command]
 async fn stop_proxy(state: tauri::State<'_, InspectorState>) -> Result<(), String> {
+    if let Some(task) = state
+        .logcat_task
+        .lock()
+        .map_err(|_| "logcat lock poisoned")?
+        .take()
+    {
+        task.abort();
+    }
     state.proxy.stop().await;
     Ok(())
 }
@@ -283,6 +359,7 @@ pub fn run() {
                 session_id: Mutex::new(None),
                 ca_directory,
                 qr_pairings: Mutex::new(HashMap::new()),
+                logcat_task: Mutex::new(None),
             });
             Ok(())
         })
@@ -296,6 +373,7 @@ pub fn run() {
             enable_usb_wifi,
             prepare_android_certificate_install,
             start_proxy,
+            start_logcat_capture,
             stop_proxy,
             restart_proxy,
             get_proxy_status,
