@@ -68,6 +68,7 @@ describe("live scan metrics", () => {
       issues: 2,
       equivalent_actions_skipped: 97,
       skipped_branches: 3,
+      stop_reason: "unreachable_branches",
     };
     expect(
       parseScanMetrics(["states=6 transitions=5 frontier=54"], summary),

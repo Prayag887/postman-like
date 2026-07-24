@@ -29,4 +29,5 @@ export interface ScanSummary {
   issues: number;
   equivalent_actions_skipped: number;
   skipped_branches: number;
+  stop_reason: string;
 }

@@ -268,7 +268,25 @@ def fast_understand_screen(
         for action in actions
         if action.risk == "safe" and not action.selected
     ]
-    preferred = safe_actions[0].index if safe_actions else -1
+    broad_navigation = re.compile(
+        r"\b(live class|live exam|assignment|practice|study|home|"
+        r"see all|details?|topics?|courses?)\b",
+        re.IGNORECASE,
+    )
+    narrow_or_mutating = re.compile(
+        r"\b(start now|share|save|report|answer|submit|unlabelled)\b",
+        re.IGNORECASE,
+    )
+
+    def action_score(action: Action) -> tuple[int, int]:
+        if broad_navigation.search(action.label):
+            return (0, action.index)
+        if narrow_or_mutating.search(action.label):
+            return (2, action.index)
+        return (1, action.index)
+
+    preferred_action = min(safe_actions, key=action_score) if safe_actions else None
+    preferred = preferred_action.index if preferred_action else -1
     action_names = ", ".join(action.label for action in safe_actions[:4])
     return {
         "screen_name": screen_name[:80],

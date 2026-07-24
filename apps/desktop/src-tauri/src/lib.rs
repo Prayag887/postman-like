@@ -17,6 +17,8 @@ struct ScanSummary {
     equivalent_actions_skipped: usize,
     #[serde(default)]
     skipped_branches: usize,
+    #[serde(default)]
+    stop_reason: String,
 }
 
 #[tauri::command]

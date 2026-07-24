@@ -9,6 +9,7 @@ from autonomous_scan import (
     FrontierItem,
     is_immediate_loop,
     pop_fair_frontier,
+    root_navigation_action,
     semantic_action_key,
     semantic_state_id,
     state_issues,
@@ -264,7 +265,16 @@ class NavigationTests(unittest.TestCase):
             output = Path(directory)
             (output / "transitions").mkdir()
             write_outputs(
-                output, metadata, {"state": state}, [], [], [], 0, [], []
+                output,
+                metadata,
+                {"state": state},
+                [],
+                [],
+                [],
+                0,
+                [],
+                [],
+                "frontier_exhausted",
             )
             self.assertFalse((output / "agent_report.md").exists())
             issue = {
@@ -285,6 +295,7 @@ class NavigationTests(unittest.TestCase):
                 0,
                 [],
                 [],
+                "frontier_exhausted",
             )
             report = (output / "agent_report.md").read_text()
             self.assertIn("What happened", report)
@@ -336,6 +347,51 @@ class NavigationTests(unittest.TestCase):
             frontier, states, "Live classes", consecutive_on_screen=4
         )
         self.assertEqual(selected.source_id, "other")
+
+    def test_root_discovery_prefers_visible_home_over_back(self):
+        back = Action(
+            0,
+            "Back",
+            "android.view.View",
+            "[0,0][100,100]",
+            50,
+            50,
+            "safe",
+        )
+        home = Action(
+            1,
+            "Home",
+            "android.view.View",
+            "[0,100][100,200]",
+            50,
+            150,
+            "safe",
+        )
+        self.assertEqual(root_navigation_action([back, home]), home)
+
+    def test_root_discovery_allows_only_contextual_flow_exit(self):
+        generic_exit = Action(
+            0,
+            "Exit",
+            "android.view.View",
+            "[0,0][100,100]",
+            50,
+            50,
+            "safe",
+            context="Account settings",
+        )
+        quiz_exit = Action(
+            1,
+            "Exit",
+            "android.view.View",
+            "[0,100][100,200]",
+            50,
+            150,
+            "safe",
+            context="Exit Model Set Test question timer",
+        )
+        self.assertIsNone(root_navigation_action([generic_exit]))
+        self.assertEqual(root_navigation_action([quiz_exit]), quiz_exit)
 
 
 if __name__ == "__main__":

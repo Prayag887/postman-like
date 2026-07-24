@@ -551,8 +551,12 @@ export function App() {
             <section className="scan-result">
               <h2>
                 {scanSummary.complete
-                  ? "Safe frontier exhausted"
-                  : "Completed with configured limits"}
+                  ? "Reachable safe coverage exhausted"
+                  : scanSummary.stop_reason === "unreachable_branches"
+                    ? "Coverage incomplete: unreachable branches"
+                    : scanSummary.stop_reason === "safety_timeout"
+                      ? "Coverage paused by safety timeout"
+                      : "Coverage stopped before completion"}
               </h2>
               <p>
                 {scanSummary.issues} issues recorded.{" "}

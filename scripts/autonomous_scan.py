@@ -383,6 +383,21 @@ def navigate_in_session(
             if action.label.casefold()
             in {"back", "close", "navigate up", "close sheet"}
         ]
+        contextual_exit = next(
+            (
+                action
+                for action in actions
+                if action.label.casefold() == "exit"
+                and re.search(
+                    r"\b(quiz|test|exam|question|practice|timer)\b",
+                    action.context,
+                    re.IGNORECASE,
+                )
+            ),
+            None,
+        )
+        if contextual_exit:
+            back_actions.insert(0, contextual_exit)
         if not back_actions:
             return False, hierarchy
         perform_action(serial, binary, back_actions[0])
@@ -402,6 +417,66 @@ def navigate_in_session(
         if foreground_package(serial, binary) != package:
             return False, hierarchy
     return True, hierarchy
+
+
+def root_navigation_action(actions: list[Action]) -> Action | None:
+    home = next(
+        (
+            action
+            for action in actions
+            if not action.selected and action.label.casefold() == "home"
+        ),
+        None,
+    )
+    escape = next(
+        (
+            action
+            for label in ("close sheet", "close", "cancel", "back", "navigate up")
+            for action in actions
+            if not action.selected and action.label.casefold() == label
+        ),
+        None,
+    )
+    contextual_exit = next(
+        (
+            action
+            for action in actions
+            if action.label.casefold() == "exit"
+            and re.search(
+                r"\b(quiz|test|exam|question|practice|timer)\b",
+                action.context,
+                re.IGNORECASE,
+            )
+        ),
+        None,
+    )
+    return home or contextual_exit or escape
+
+
+def discover_visible_root(
+    serial: str,
+    package: str,
+    binary: str,
+    max_steps: int = 12,
+) -> str:
+    hierarchy = wait_for_stability(serial, binary, timeout=3.0)
+    seen: set[str] = set()
+    for _ in range(max_steps):
+        actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
+        state = fingerprint(hierarchy)
+        if state in seen:
+            return hierarchy
+        seen.add(state)
+        action = root_navigation_action(actions)
+        if action is None:
+            return hierarchy
+        perform_action(serial, binary, action)
+        hierarchy = observe_after_action(serial, binary)
+        if foreground_package(serial, binary) != package:
+            raise RuntimeError(
+                "visible in-app root discovery left the target package"
+            )
+    return hierarchy
 
 
 def pop_fair_frontier(
@@ -680,6 +755,7 @@ def write_outputs(
     frontier_remaining: int,
     sampling: list[dict[str, Any]],
     skipped_branches: list[dict[str, Any]],
+    stop_reason: str,
 ) -> None:
     issue_list = [
         make_actionable(issue, states) for issue in deduplicate_issues(issues)
@@ -717,6 +793,7 @@ def write_outputs(
         "frontier_remaining": frontier_remaining,
         "skipped_branches": len(skipped_branches),
         "complete": frontier_remaining == 0 and not skipped_branches,
+        "stop_reason": stop_reason,
     }
     (output / "coverage.json").write_text(
         json.dumps(coverage, indent=2), encoding="utf-8"
@@ -831,8 +908,12 @@ def main() -> int:
         raise RuntimeError(
             f"{args.package} must already be open in the foreground before scanning"
         )
-    wait_for_stability(args.serial, args.adb)
-    hierarchy, screenshot = capture(args.serial, output, 0, args.adb)
+    hierarchy = discover_visible_root(
+        args.serial, args.package, args.adb
+    )
+    hierarchy, screenshot = save_observation(
+        args.serial, output, 0, args.adb, hierarchy
+    )
     root_actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
     root_id = semantic_state_id(hierarchy, root_actions)
     root_semantics = fast_understand_screen(hierarchy, root_actions)
@@ -1216,6 +1297,20 @@ def main() -> int:
             flush=True,
         )
 
+    if frontier:
+        if time.monotonic() >= deadline:
+            stop_reason = "safety_timeout"
+        elif args.max_states > 0 and len(states) >= args.max_states:
+            stop_reason = "state_limit"
+        elif args.max_actions > 0 and len(transitions) >= args.max_actions:
+            stop_reason = "action_limit"
+        else:
+            stop_reason = "interrupted"
+    elif skipped_branches:
+        stop_reason = "unreachable_branches"
+    else:
+        stop_reason = "frontier_exhausted"
+
     write_outputs(
         output,
         metadata,
@@ -1226,6 +1321,7 @@ def main() -> int:
         len(frontier),
         sampler.records(),
         skipped_branches,
+        stop_reason,
     )
     print(f"Scan recorded at {output.resolve()}")
     return 0
