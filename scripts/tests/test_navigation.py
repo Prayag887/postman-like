@@ -1,3 +1,4 @@
+import json
 import unittest
 from collections import deque
 from pathlib import Path
@@ -5,12 +6,14 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from autonomous_scan import (
+    RISKY_WORDS,
     RepresentativeSampler,
     StateRecord,
     FrontierItem,
     dump_hierarchy,
     is_immediate_loop,
     is_authentication_action,
+    exploration_priority,
     pop_fair_frontier,
     recover_from_visible_root,
     root_navigation_action,
@@ -23,11 +26,22 @@ from autonomous_scan import (
 from local_model_scan import (
     Action,
     discover_actions,
+    fast_understand_screen,
     infer_contextual_action_variants,
+)
+from ui_venus_planner import (
+    UiVenusPlanner,
+    extract_json as extract_planner_json,
+    representative_actions,
+    should_use_ai,
 )
 
 
 class NavigationTests(unittest.TestCase):
+    def test_final_sharing_actions_are_blocked(self):
+        self.assertIsNotNone(RISKY_WORDS.search("Share Note"))
+        self.assertIsNotNone(RISKY_WORDS.search("Invite students"))
+
     def test_selected_controls_are_not_offered_as_actions(self):
         hierarchy = """<?xml version="1.0"?>
 <hierarchy>
@@ -299,6 +313,109 @@ class NavigationTests(unittest.TestCase):
             set(range(24, 31)),
         )
 
+    def test_ai_planner_receives_component_representatives(self):
+        actions = [
+            Action(
+                index=index,
+                label=f"Navigate to year {2023 + index}",
+                class_name="android.widget.TextView",
+                bounds=f"[0,{index}][100,{index + 1}]",
+                x=50,
+                y=index,
+                risk="safe",
+            )
+            for index in range(20)
+        ]
+        self.assertEqual(
+            [action.label for action in representative_actions(actions)],
+            ["Navigate to year 2023"],
+        )
+
+    def test_ai_planner_extracts_fenced_json(self):
+        self.assertEqual(
+            extract_planner_json(
+                '```json\n{"preferred_action_index":4,"reason":"coverage"}\n```'
+            )["preferred_action_index"],
+            4,
+        )
+
+    def test_ai_planner_reuses_persistent_screen_decision(self):
+        action = Action(
+            0,
+            "See All",
+            "android.view.View",
+            "[0,0][100,100]",
+            50,
+            50,
+            "safe",
+        )
+        with TemporaryDirectory() as directory:
+            cache = Path(directory) / "planner.json"
+            cache.write_text(
+                json.dumps(
+                    {
+                        "schema": {
+                            "engine": "ui-venus",
+                            "available": True,
+                            "preferred_action_index": 0,
+                            "preferred_action_label": "See All",
+                            "reason": "broader coverage",
+                        }
+                    }
+                )
+            )
+            planner = UiVenusPlanner(cache)
+            decision = planner.plan(
+                "schema", Path("unused.png"), [action], set()
+            )
+            self.assertTrue(decision["cached"])
+            self.assertEqual(decision["latency_ms"], 0)
+
+    def test_ai_is_not_called_for_trivial_back_cancel_screen(self):
+        actions = [
+            Action(
+                index,
+                label,
+                "android.view.View",
+                f"[0,{index}][100,{index + 1}]",
+                50,
+                index,
+                "safe",
+            )
+            for index, label in enumerate(("Back", "Cancel", "Scroll forward"))
+        ]
+        self.assertFalse(should_use_ai(actions))
+
+    def test_content_is_explored_before_back(self):
+        back = Action(
+            0, "Back", "android.view.View", "[0,0][10,10]", 5, 5, "safe"
+        )
+        details = Action(
+            1,
+            "View Details",
+            "android.view.View",
+            "[0,10][10,20]",
+            5,
+            15,
+            "safe",
+        )
+        self.assertLess(
+            exploration_priority(details), exploration_priority(back)
+        )
+
+    def test_screen_name_ignores_navigation_chrome(self):
+        hierarchy = """<hierarchy>
+  <node text="Back" class="android.view.View" clickable="true"
+        enabled="true" bounds="[0,0][100,100]" />
+  <node text="Forces" class="android.widget.TextView" clickable="false"
+        enabled="true" bounds="[0,100][200,200]" />
+</hierarchy>"""
+        actions = discover_actions(hierarchy)
+        self.assertEqual(
+            fast_understand_screen(hierarchy, actions)["screen_name"],
+            "Forces",
+        )
+
     def test_any_safe_control_without_an_effect_is_reported(self):
         issues = transition_issues(
             "same",
@@ -442,6 +559,40 @@ class NavigationTests(unittest.TestCase):
             frontier, states, "Live classes", consecutive_on_screen=4
         )
         self.assertEqual(selected.source_id, "other")
+
+    def test_scheduler_finishes_current_screen_before_restore(self):
+        def state(identifier, screen):
+            return StateRecord(
+                id=identifier,
+                ordinal=0,
+                path=[],
+                hierarchy="",
+                screenshot="",
+                actions_found=1,
+                scrollables=0,
+                screen_name=screen,
+                purpose="",
+                flow_stage="detail",
+                semantic_confidence=90,
+                semantic_evidence=[],
+                semantic_action_variants=[],
+                semantic_preferred_action_index=-1,
+            )
+
+        states = {
+            "home": state("home", "Home"),
+            "detail": state("detail", "Forces"),
+        }
+        frontier = deque(
+            [
+                FrontierItem("home", [], {"label": "Practice"}),
+                FrontierItem("detail", [], {"label": "Share"}),
+            ]
+        )
+        selected = pop_fair_frontier(
+            frontier, states, "Forces", consecutive_on_screen=1
+        )
+        self.assertEqual(selected.source_id, "detail")
 
     def test_root_discovery_prefers_visible_home_over_back(self):
         back = Action(

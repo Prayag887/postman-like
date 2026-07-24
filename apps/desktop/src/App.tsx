@@ -23,6 +23,7 @@ import type {
   AndroidApp,
   AndroidDevice,
   ConnectionType,
+  ScanEvent,
   ScanSummary,
 } from "./types";
 
@@ -86,6 +87,7 @@ export function App() {
   const [appLaunched, setAppLaunched] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanLogs, setScanLogs] = useState<string[]>([]);
+  const [scanEvents, setScanEvents] = useState<ScanEvent[]>([]);
   const [scanSummary, setScanSummary] = useState<ScanSummary>();
   const [scanOutput, setScanOutput] = useState<string>();
   const [theme, setTheme] = useState<Theme>(() =>
@@ -169,6 +171,7 @@ export function App() {
     setStep("live");
     setScanning(true);
     setScanLogs([]);
+    setScanEvents([]);
     setScanSummary(undefined);
     setScanOutput(undefined);
     setError(undefined);
@@ -178,6 +181,9 @@ export function App() {
     const stopCompleted = await listen<string>("scan-completed", (event) => {
       setScanOutput(event.payload);
     });
+    const stopEvents = await listen<ScanEvent>("scan-event", (event) => {
+      setScanEvents((current) => [...current.slice(-199), event.payload]);
+    });
     try {
       setScanSummary(await runAutonomousScan(selected, selectedApp));
     } catch (reason) {
@@ -185,6 +191,7 @@ export function App() {
     } finally {
       stopProgress();
       stopCompleted();
+      stopEvents();
       setScanning(false);
     }
   }
@@ -193,6 +200,16 @@ export function App() {
     () => parseScanMetrics(scanLogs, scanSummary),
     [scanLogs, scanSummary],
   );
+  const liveIncidents = scanEvents.filter(
+    (event): event is Extract<ScanEvent, { kind: "incident" }> =>
+      event.kind === "incident",
+  );
+  const latestDecision = [...scanEvents]
+    .reverse()
+    .find(
+      (event): event is Extract<ScanEvent, { kind: "model_decision" }> =>
+        event.kind === "model_decision",
+    );
 
   return (
     <div className="app-shell">
@@ -488,8 +505,8 @@ export function App() {
                     : "Ready to explore"}
               </h1>
               <p className="subtitle">
-                Fast local semantics rank safe actions without blocking each
-                tap. Exploration stays in the open application session.
+                UI‑Venus plans once per new screen. Cached component and route
+                memory keep known screens fast while diagnostics stream live.
               </p>
             </div>
             <button
@@ -516,10 +533,59 @@ export function App() {
               <span>Frontier</span>
             </div>
             <div>
-              <strong>{scanSummary?.issues ?? 0}</strong>
+              <strong>{scanSummary?.issues ?? liveIncidents.length}</strong>
               <span>Issues</span>
             </div>
           </section>
+
+          <section className="live-intelligence" aria-live="polite">
+            <div>
+              <span>AI planner</span>
+              <strong>
+                {latestDecision
+                  ? latestDecision.decision.available
+                    ? "UI‑Venus 1.5 2B"
+                    : "Deterministic fallback"
+                  : scanning
+                    ? "Loading planner…"
+                    : "Ready"}
+              </strong>
+              {latestDecision && (
+                <p>
+                  {latestDecision.screen}:{" "}
+                  {latestDecision.decision.preferred_action_label ??
+                    "No action selected"}
+                  {latestDecision.decision.cached ? " · cached" : ""}
+                </p>
+              )}
+            </div>
+            <div>
+              <span>Live incidents</span>
+              <strong>{liveIncidents.length}</strong>
+              <p>
+                Parsing, StrictMode, navigation, and runtime failures appear
+                here as soon as they are observed.
+              </p>
+            </div>
+          </section>
+
+          {liveIncidents.length > 0 && (
+            <section className="incident-feed" aria-label="Live incidents">
+              <h2>Issues detected during this scan</h2>
+              {liveIncidents.slice(-6).reverse().map((event, index) => (
+                <article key={`${event.occurred_at}-${index}`}>
+                  <span>{event.issue.severity}</span>
+                  <div>
+                    <strong>{event.issue.title}</strong>
+                    <p>
+                      {event.issue.screen_name ?? "Unknown screen"} ·{" "}
+                      {event.issue.category}
+                    </p>
+                  </div>
+                </article>
+              ))}
+            </section>
+          )}
 
           {error && (
             <div className="error" role="alert">

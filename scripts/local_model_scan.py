@@ -317,7 +317,28 @@ def fast_understand_screen(
             value = node.attrib.get(key, "").strip()
             if value and value not in visible:
                 visible.append(value[:160])
-    screen_name = visible[0] if visible else "Unknown screen"
+    navigation_labels = {
+        "back",
+        "cancel",
+        "close",
+        "dismiss",
+        "navigate up",
+        "ok",
+        "retry",
+        "share",
+        "save",
+        "report",
+    }
+    screen_name = next(
+        (
+            value
+            for value in visible
+            if value.casefold() not in navigation_labels
+            and not value.casefold().startswith("close ")
+            and value != "Unlabelled control"
+        ),
+        visible[0] if visible else "Unknown screen",
+    )
     combined = " ".join(visible).casefold()
     if any("edittext" in value.casefold() for value in classes):
         flow_stage = "form"

@@ -6,6 +6,8 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use tauri::{Emitter, Manager};
 
+const SCAN_EVENT_PREFIX: &str = "@@SCAN_EVENT@@";
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ScanSummary {
     states_discovered: usize,
@@ -83,7 +85,23 @@ async fn run_autonomous_scan(
         } else {
             development
         };
-        let python = if cfg!(windows) { "python" } else { "python3" };
+        let python = if cfg!(target_os = "macos") {
+            [
+                "/opt/homebrew/bin/python3.11",
+                "/usr/local/bin/python3.11",
+                "python3",
+            ]
+            .into_iter()
+            .find(|candidate| candidate == &"python3" || std::path::Path::new(candidate).is_file())
+            .unwrap_or("python3")
+        } else if cfg!(windows) {
+            "python"
+        } else {
+            "python3"
+        };
+        let planner_cache = data_dir
+            .join("planner-cache")
+            .join(format!("{package_name}.json"));
         let mut child = Command::new(python)
             .arg(&script)
             .args(["--serial", &serial, "--package", &package_name])
@@ -99,6 +117,8 @@ async fn run_autonomous_scan(
             .arg(adb.path())
             .arg("--output")
             .arg(&output)
+            .arg("--planner-cache")
+            .arg(&planner_cache)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -107,19 +127,37 @@ async fn run_autonomous_scan(
             .stdout
             .take()
             .ok_or_else(|| "local scanner stdout was unavailable".to_owned())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "local scanner stderr was unavailable".to_owned())?;
+        let stderr_app = app.clone();
+        let stderr_thread = std::thread::spawn(move || {
+            let mut captured = Vec::new();
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let _ = stderr_app.emit("scan-progress", format!("model: {line}"));
+                captured.push(line);
+            }
+            captured.join("\n")
+        });
         for line in BufReader::new(stdout).lines() {
             let line = line.map_err(|error| error.to_string())?;
+            if let Some(payload) = line.strip_prefix(SCAN_EVENT_PREFIX)
+                && let Ok(event) = serde_json::from_str::<serde_json::Value>(payload)
+            {
+                app.emit("scan-event", event)
+                    .map_err(|error| error.to_string())?;
+                continue;
+            }
             app.emit("scan-progress", &line)
                 .map_err(|error| error.to_string())?;
         }
-        let result = child
-            .wait_with_output()
-            .map_err(|error| error.to_string())?;
-        if !result.status.success() {
-            return Err(format!(
-                "local scanner failed: {}",
-                String::from_utf8_lossy(&result.stderr).trim()
-            ));
+        let status = child.wait().map_err(|error| error.to_string())?;
+        let stderr = stderr_thread
+            .join()
+            .map_err(|_| "scanner stderr reader panicked".to_owned())?;
+        if !status.success() {
+            return Err(format!("local scanner failed: {}", stderr.trim()));
         }
         let summary_path = output.join("summary.json");
         let summary: ScanSummary = serde_json::from_slice(

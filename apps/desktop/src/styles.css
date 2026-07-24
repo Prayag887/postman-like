@@ -693,6 +693,87 @@ footer p {
   line-height: 20px;
 }
 
+.live-intelligence {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.live-intelligence > div {
+  min-height: 116px;
+  padding: 18px 20px;
+  border-radius: 16px;
+  background: var(--md-surface-container-low);
+  border: 1px solid var(--md-outline-variant);
+}
+
+.live-intelligence span,
+.live-intelligence strong {
+  display: block;
+}
+
+.live-intelligence span {
+  color: var(--md-primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.live-intelligence strong {
+  margin-top: 7px;
+  font-size: 17px;
+}
+
+.live-intelligence p {
+  margin: 7px 0 0;
+  color: var(--md-on-surface-variant);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.incident-feed {
+  margin-top: 16px;
+  padding: 18px;
+  border-radius: 16px;
+  color: var(--md-on-error-container);
+  background: var(--md-error-container);
+}
+
+.incident-feed h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.incident-feed article {
+  padding: 10px 0;
+  display: flex;
+  gap: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--md-error) 24%, transparent);
+}
+
+.incident-feed article > span {
+  height: fit-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--md-error-container);
+  background: var(--md-error);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.incident-feed strong,
+.incident-feed p {
+  display: block;
+}
+
+.incident-feed p {
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+
 .scan-console {
   min-height: 300px;
   margin-top: 20px;

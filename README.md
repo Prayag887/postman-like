@@ -71,12 +71,15 @@ APP_TESTER_ADB=/absolute/path/to/adb cargo run -p app-tester
 
 ## Local-model scan
 
-The first autonomous vertical slice uses the official `Qwen/Qwen3-0.6B` model through local PyTorch inference. The initial model download is approximately 1.4 GB on disk and is reused offline afterward.
+On Apple silicon, autonomous navigation uses the 6-bit MLX build of
+`UI-Venus-1.5-2B`. The model is downloaded once (approximately 2.3 GB), kept
+entirely local, and reused from the Hugging Face cache. Other platforms retain
+the experimental `Qwen/Qwen3-0.6B` PyTorch scanner.
 
 Install the local-only model dependencies:
 
 ```bash
-python3 -m pip install -r scripts/requirements-local-model.txt
+python3.11 -m pip install -r scripts/requirements-local-model.txt
 ```
 
 Launch and log into the Android application, then run a bounded safe scan:
@@ -88,7 +91,13 @@ python3 scripts/local_model_scan.py \
   --steps 4
 ```
 
-The experimental Qwen scanner captures screenshots and UI hierarchies, fingerprints states, discovers clickable actions, blocks deterministic high-risk language, asks the local model only to rank remaining safe actions, validates its JSON response, and records every transition under `scan-results/`. The autonomous desktop scanner uses fast deterministic local semantics in its navigation hot path so model inference never blocks a tap. Scan results are ignored by Git because they can contain private application data.
+The scanner captures screenshots and UI hierarchies, fingerprints states,
+discovers clickable actions, blocks deterministic high-risk language, validates
+model output, and records every transition under `scan-results/`. UI-Venus is
+asked once for each new ambiguous screen schema; its intent and representative
+action are cached, so revisiting a known screen does not incur another
+inference delay. Simple screens stay on the deterministic path. Scan results
+are ignored by Git because they can contain private application data.
 
 For graph-based exploration with in-session branch navigation, scrolling, checkpoint persistence, deterministic issue analysis, and an agent report:
 
@@ -102,6 +111,11 @@ python3 scripts/autonomous_scan.py \
 ```
 
 Newly reached screens are explored in the existing app session. The scanner attaches to the application already open in the foreground. To reach another branch it uses only visible in-app Back, Close, or Navigate Up controls and semantic actions inside that same process. It never sends Android's system Back key. If a branch cannot be reached through visible controls without leaving the target application, it is skipped; the scanner never closes, force-stops, or relaunches the app. A fairness limit rotates the frontier after several consecutive actions on one semantic screen. Fast local semantics record a short screen name, purpose, flow stage, and confidence for every state.
+
+The desktop UI streams planner decisions and actionable incidents while the
+scan is running. Reports omit non-issues and retain concrete failure evidence,
+including screen and action context plus captured network or runtime details
+when available.
 
 Target-process logcat is correlated with the action and screen active at the time. Recognized JSON/DTO parsing failures include the parser/DTO name, redacted curl, redacted response evidence, timestamp, screen, and navigation path when those values were actually logged by the application. StrictMode reports include the screen, triggering action, navigation path, timestamp, and stack excerpt. Secrets in authorization, cookie, API-key, token, password, and session fields are redacted. Missing network evidence is explicitly reported rather than inferred.
 

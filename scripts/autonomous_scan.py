@@ -28,6 +28,7 @@ from local_model_scan import (
     save_observation,
 )
 from runtime_diagnostics import LogcatCollector
+from ui_venus_planner import UiVenusPlanner, preferred_action_index
 
 
 @dataclass
@@ -68,7 +69,8 @@ class SamplingGroup:
 
 RISKY_WORDS = re.compile(
     r"\b(delete|remove|logout|sign out|pay|purchase|buy|transfer|send|post|"
-    r"publish|submit|unsubscribe|cancel subscription|accept|agree)\b",
+    r"publish|submit|unsubscribe|cancel subscription|accept|agree|invite|"
+    r"share note)\b",
     re.IGNORECASE,
 )
 
@@ -78,6 +80,23 @@ AUTHENTICATION_WORDS = re.compile(
     re.IGNORECASE,
 )
 
+EVENT_PREFIX = "@@SCAN_EVENT@@"
+
+
+def emit_scan_event(kind: str, **payload: Any) -> None:
+    print(
+        EVENT_PREFIX
+        + json.dumps(
+            {
+                "kind": kind,
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                **payload,
+            },
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
+
 
 def is_authentication_action(action: Action | dict[str, Any]) -> bool:
     value = asdict(action) if isinstance(action, Action) else action
@@ -85,6 +104,29 @@ def is_authentication_action(action: Action | dict[str, Any]) -> bool:
         (str(value.get("label", "")), str(value.get("context", "")))
     )
     return bool(AUTHENTICATION_WORDS.search(searchable))
+
+
+def exploration_priority(action: Action) -> tuple[int, int]:
+    label = action.label.casefold()
+    if re.search(
+        r"\b(live class|live exam|assignment|practice|study|course|"
+        r"see all|details|topics|profile|search|filter)\b",
+        label,
+    ):
+        return (0, action.index)
+    if action.class_name == "__scroll__":
+        return (2, action.index)
+    if label in {
+        "back",
+        "cancel",
+        "close",
+        "close sheet",
+        "dismiss",
+        "navigate up",
+        "ok",
+    } or label.startswith("close "):
+        return (3, action.index)
+    return (1, action.index)
 
 
 def run_adb(
@@ -586,6 +628,13 @@ def pop_fair_frontier(
     limit: int = 4,
 ) -> FrontierItem:
     if consecutive_on_screen < limit:
+        for index, item in enumerate(frontier):
+            source = states.get(item.source_id)
+            if source and source.screen_name == current_screen:
+                frontier.rotate(-index)
+                selected = frontier.popleft()
+                frontier.rotate(index)
+                return selected
         return frontier.popleft()
     for index, item in enumerate(frontier):
         source = states.get(item.source_id)
@@ -979,6 +1028,8 @@ def main() -> int:
     parser.add_argument("--max-minutes", type=int, default=15)
     parser.add_argument("--adb", default="adb")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--planner-cache", type=Path)
+    parser.add_argument("--no-ai-planner", action="store_true")
     args = parser.parse_args()
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -990,7 +1041,7 @@ def main() -> int:
         "started_at": datetime.now(timezone.utc).isoformat(),
         "serial": args.serial,
         "package": args.package,
-        "model": "fast-local-semantics",
+        "model": "ui-venus-1.5-2b-6bit",
         "mode": "safe",
         "limits": {
             "max_states": args.max_states,
@@ -1013,11 +1064,41 @@ def main() -> int:
     hierarchy, screenshot = save_observation(
         args.serial, output, 0, args.adb, hierarchy
     )
+    tested_semantic_actions: set[str] = set()
+    model_decisions: list[dict[str, Any]] = []
+    planner = UiVenusPlanner(
+        args.planner_cache, enabled=not args.no_ai_planner
+    )
     root_actions = with_scroll_actions(discover_actions(hierarchy), hierarchy)
     root_id = semantic_state_id(hierarchy, root_actions)
     root_semantics = fast_understand_screen(hierarchy, root_actions)
+    root_schema = screen_schema_key(root_actions)
+    root_decision = planner.plan(
+        root_schema, screenshot, root_actions, tested_semantic_actions
+    )
+    metadata["model"] = root_decision.get("engine", metadata["model"])
+    metadata["model_device"] = (
+        "apple_silicon_mlx"
+        if root_decision.get("available")
+        else "deterministic"
+    )
+    (output / "run-metadata.json").write_text(
+        json.dumps(metadata, indent=2), encoding="utf-8"
+    )
+    root_semantics["preferred_action_index"] = preferred_action_index(
+        root_actions, root_decision
+    )
+    if root_decision.get("purpose"):
+        root_semantics["purpose"] = root_decision["purpose"]
+    model_decisions.append({"state_id": root_id, **root_decision})
+    emit_scan_event(
+        "model_decision",
+        state_id=root_id,
+        screen=root_semantics["screen_name"],
+        decision=root_decision,
+    )
     semantic_cache: dict[str, dict[str, Any]] = {
-        screen_schema_key(root_actions): root_semantics
+        root_schema: root_semantics
     }
     states: dict[str, StateRecord] = {
         root_id: StateRecord(
@@ -1040,11 +1121,11 @@ def main() -> int:
         )
     }
     issues = state_issues(root_id, hierarchy, root_actions, str(screenshot.relative_to(output)))
+    for incident in issues:
+        emit_scan_event("incident", issue=incident)
     frontier: deque[FrontierItem] = deque()
     queued: set[tuple[str, tuple[str, str, str]]] = set()
     queued_semantic_actions: set[str] = set()
-    tested_semantic_actions: set[str] = set()
-    model_decisions: list[dict[str, Any]] = []
     sampler = RepresentativeSampler()
 
     def enqueue(
@@ -1056,38 +1137,20 @@ def main() -> int:
             if 0 <= preferred_index < len(actions)
             and not actions[preferred_index].selected
             and actions[preferred_index].risk == "safe"
-            else next(
-                (
-                    action
-                    for action in actions
-                    if not action.selected and action.risk == "safe"
-                ),
-                None,
-            )
+            else None
         )
-        decision = {
-            "reason": (
-                "Used the screen-understanding model's preferred action."
-                if preferred_index >= 0
-                else "Used deterministic first-safe fallback."
-            ),
-            "screen_understanding_reused": True,
-        }
-        model_decisions.append(
-            {
-                "state_id": state.id,
-                "preferred_action": asdict(preferred) if preferred else None,
-                "decision": decision,
-            }
+        ordered = ([preferred] if preferred else []) + sorted(
+            [
+                action
+                for action in actions
+                if preferred is None
+                or action_key(action) != action_key(preferred)
+            ],
+            key=exploration_priority,
         )
-        ordered = ([preferred] if preferred else []) + [
-            action for action in actions if preferred is None or action_key(action) != action_key(preferred)
-        ]
         eligible: list[FrontierItem] = []
         sampling_scope = (
-            str(state.path[0].get("label", state.screen_name))
-            if state.path
-            else state.screen_name
+            f"{state.screen_name.casefold()}|{state.flow_stage.casefold()}"
         )
         variants_by_index = {
             int(variant["action_index"]): variant
@@ -1095,6 +1158,8 @@ def main() -> int:
         }
         for action in ordered:
             if action.risk != "safe" or RISKY_WORDS.search(action.label):
+                continue
+            if action.label == "Unlabelled control":
                 continue
             if is_authentication_action(action):
                 continue
@@ -1106,7 +1171,7 @@ def main() -> int:
             if not sampler.accept(sampling_scope, action, classification):
                 continue
             semantic_key = semantic_action_key(
-                f"{sampling_scope}|{state.screen_name}",
+                sampling_scope,
                 action,
                 classification,
             )
@@ -1257,10 +1322,34 @@ def main() -> int:
             destination_hierarchy = observe_after_action(
                 args.serial, args.adb
             )
-        except subprocess.CalledProcessError:
-            destination_hierarchy = wait_for_stability(
-                args.serial, args.adb, timeout=3.0
-            )
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            RuntimeError,
+        ) as error:
+            incident = {
+                "category": "scanner_runtime",
+                "severity": "major",
+                "confidence": 100,
+                "state_id": actual_source_id,
+                "title": "Android hierarchy capture failed after an action",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "screen_name": states[actual_source_id].screen_name,
+                "how_it_occurred": {
+                    "action": asdict(action),
+                    "navigation_path": current_path,
+                },
+                "evidence": {"error": f"{type(error).__name__}: {error}"},
+            }
+            issues.append(incident)
+            emit_scan_event("incident", issue=incident)
+            try:
+                destination_hierarchy = discover_visible_root(
+                    args.serial, args.package, args.adb
+                )
+            except Exception:
+                current_state_id = ""
+                continue
         latency_ms = round((time.monotonic() - started) * 1000)
         raw_logs, runtime_issues = collector.collect(
             state_id=actual_source_id,
@@ -1271,6 +1360,8 @@ def main() -> int:
         log_path = output / "logs" / f"transition-{len(transitions):03}.log"
         log_path.write_text(raw_logs, encoding="utf-8")
         issues.extend(runtime_issues)
+        for incident in runtime_issues:
+            emit_scan_event("incident", issue=incident)
         outside = foreground_package(args.serial, args.adb)
         component_after = foreground_component(args.serial, args.adb)
         if outside != args.package:
@@ -1323,6 +1414,26 @@ def main() -> int:
                 semantics = fast_understand_screen(
                     saved_hierarchy, destination_actions
                 )
+                planner_decision = planner.plan(
+                    schema_key,
+                    saved_screenshot,
+                    destination_actions,
+                    tested_semantic_actions,
+                )
+                semantics["preferred_action_index"] = preferred_action_index(
+                    destination_actions, planner_decision
+                )
+                if planner_decision.get("purpose"):
+                    semantics["purpose"] = planner_decision["purpose"]
+                model_decisions.append(
+                    {"state_id": destination_id, **planner_decision}
+                )
+                emit_scan_event(
+                    "model_decision",
+                    state_id=destination_id,
+                    screen=semantics["screen_name"],
+                    decision=planner_decision,
+                )
                 semantic_cache[schema_key] = semantics
             state = StateRecord(
                 id=destination_id,
@@ -1346,14 +1457,15 @@ def main() -> int:
                 ),
             )
             states[destination_id] = state
-            issues.extend(
-                state_issues(
-                    destination_id,
-                    saved_hierarchy,
-                    destination_actions,
-                    state.screenshot,
-                )
+            discovered_issues = state_issues(
+                destination_id,
+                saved_hierarchy,
+                destination_actions,
+                state.screenshot,
             )
+            issues.extend(discovered_issues)
+            for incident in discovered_issues:
+                emit_scan_event("incident", issue=incident)
             enqueue(state, destination_actions, prioritize=True)
             capture_ordinal += 1
         current_state_id = destination_id
@@ -1385,18 +1497,19 @@ def main() -> int:
         else:
             last_destination_screen = destination_screen
             consecutive_on_screen = 1
-        issues.extend(
-            transition_issues(
-                actual_source_id,
-                destination_id,
-                transition["action"],
-                latency_ms,
-                states[destination_id].screenshot,
-                states[actual_source_id].screen_name,
-                current_path,
-                observable_effects,
-            )
+        discovered_issues = transition_issues(
+            actual_source_id,
+            destination_id,
+            transition["action"],
+            latency_ms,
+            states[destination_id].screenshot,
+            states[actual_source_id].screen_name,
+            current_path,
+            observable_effects,
         )
+        issues.extend(discovered_issues)
+        for incident in discovered_issues:
+            emit_scan_event("incident", issue=incident)
         checkpoint = {
             "states": [asdict(state) for state in states.values()],
             "transitions": transitions,
@@ -1412,6 +1525,16 @@ def main() -> int:
             f"frontier={len(frontier)} mode={transition['navigation_mode']} "
             f"screen={states[destination_id].screen_name} action={action.label}",
             flush=True,
+        )
+        emit_scan_event(
+            "transition",
+            states=len(states),
+            transitions=len(transitions),
+            frontier=len(frontier),
+            mode=transition["navigation_mode"],
+            screen=states[destination_id].screen_name,
+            action=action.label,
+            latency_ms=latency_ms,
         )
 
     if frontier:
