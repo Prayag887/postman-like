@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Activity, Circle, Copy, Pause, Play, QrCode, Search, Settings, ShieldCheck, Square, Wifi, X } from "lucide-react";
+import { Activity, Cable, Circle, Copy, KeyRound, Pause, Play, QrCode, Search, Settings, ShieldCheck, Square, Wifi, X } from "lucide-react";
 import * as api from "./api";
 import type { AndroidApp, AndroidDevice, BodyStorage, HttpTransaction, ProxyStatus, QrPairingChallenge } from "./types";
 
@@ -40,6 +40,13 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [qrPairing, setQrPairing] = useState<QrPairingChallenge>();
   const [qrStatus, setQrStatus] = useState<"waiting"|"paired"|"failed">("waiting");
+  const [codePairingOpen, setCodePairingOpen] = useState(false);
+  const [usbWifiOpen, setUsbWifiOpen] = useState(false);
+  const [pairingHost, setPairingHost] = useState("");
+  const [pairingPort, setPairingPort] = useState("");
+  const [pairingCode, setPairingCode] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
 
   useEffect(() => {
     void api.getProxyStatus().then(setProxy);
@@ -94,6 +101,31 @@ export function App() {
       setNotice(String(error));
     }
   }
+  async function refreshWirelessDevices(endpoint: string) {
+    setNotice(`Wireless device connected at ${endpoint}`);
+    const items = await api.discoverDevices();
+    setDevices(items);
+    setDevice(items.find(item => item.connection_type === "wireless")?.serial ?? items[0]?.serial ?? "");
+  }
+  async function submitCodePairing() {
+    setConnecting(true); setConnectionError("");
+    try {
+      const result = await api.pairWithCode(pairingHost.trim(), Number(pairingPort), pairingCode.trim());
+      await refreshWirelessDevices(result.endpoint);
+      setCodePairingOpen(false);
+    } catch (error) { setConnectionError(String(error)); }
+    finally { setConnecting(false); }
+  }
+  async function submitUsbWifi() {
+    if (!device) return;
+    setConnecting(true); setConnectionError("");
+    try {
+      const result = await api.enableUsbWifi(device);
+      await refreshWirelessDevices(result.endpoint);
+      setUsbWifiOpen(false);
+    } catch (error) { setConnectionError(String(error)); }
+    finally { setConnecting(false); }
+  }
   function copy(value: string) { void navigator.clipboard.writeText(value); setNotice("Copied to clipboard"); }
 
   return <main className="shell">
@@ -104,6 +136,8 @@ export function App() {
         <option value="">Select device</option>{devices.map(item=><option key={item.serial}>{item.serial}</option>)}
       </select>
       <button className="qr-trigger" onClick={()=>void pairWithQr()}><QrCode/>Connect via QR</button>
+      <button onClick={()=>{setConnectionError(""); setCodePairingOpen(true);}}><KeyRound/>Pair with code</button>
+      <button onClick={()=>{setConnectionError(""); setUsbWifiOpen(true);}}><Cable/>USB to Wi-Fi</button>
       <select aria-label="Package" value={packageName} onChange={e=>setPackageName(e.target.value)}>
         <option value="">Select package</option>{apps.map(app=><option key={app.package_name}>{app.package_name}</option>)}
       </select>
@@ -164,6 +198,28 @@ export function App() {
           qrStatus==="paired" ? <div className="pair-result success"><ShieldCheck/><h3>Device connected</h3><p>The wireless device is now available in the device selector.</p>
             <button className="primary" onClick={()=>setQrPairing(undefined)}>Done</button></div> :
           <div className="pair-result failed"><Circle/><h3>Pairing failed</h3><p>{notice}</p><button onClick={()=>void pairWithQr()}>Generate a new QR</button></div>}
+      </section>
+    </div>}
+    {codePairingOpen && <div className="modal-backdrop" role="presentation">
+      <section className="qr-dialog connection-dialog" role="dialog" aria-modal="true" aria-labelledby="code-pair-title">
+        <button className="close" aria-label="Close" onClick={()=>setCodePairingOpen(false)}><X/></button>
+        <div className="qr-heading"><KeyRound/><div><h2 id="code-pair-title">Pair Android with a code</h2><p>Reliable alternative to Android’s QR scanner</p></div></div>
+        <ol><li>On Android, open <b>Developer options → Wireless debugging</b>.</li><li>Tap <b>Pair device with pairing code</b>.</li><li>Enter its IP address, pairing port, and six-digit code below.</li></ol>
+        <label>Device IP or host<input value={pairingHost} placeholder="192.168.1.44" onChange={e=>setPairingHost(e.target.value)} autoComplete="off"/></label>
+        <label>Pairing port<input inputMode="numeric" value={pairingPort} placeholder="37123" onChange={e=>setPairingPort(e.target.value)}/></label>
+        <label>Six-digit pairing code<input inputMode="numeric" value={pairingCode} placeholder="123456" maxLength={6} onChange={e=>setPairingCode(e.target.value.replace(/\D/g, ""))}/></label>
+        {connectionError && <p className="connection-error">{connectionError}</p>}
+        <button className="primary submit" disabled={connecting || !pairingHost || !pairingPort || pairingCode.length !== 6} onClick={()=>void submitCodePairing()}>{connecting ? "Pairing…" : "Pair device"}</button>
+      </section>
+    </div>}
+    {usbWifiOpen && <div className="modal-backdrop" role="presentation">
+      <section className="qr-dialog connection-dialog" role="dialog" aria-modal="true" aria-labelledby="usb-wifi-title">
+        <button className="close" aria-label="Close" onClick={()=>setUsbWifiOpen(false)}><X/></button>
+        <div className="qr-heading"><Cable/><div><h2 id="usb-wifi-title">Use USB once, then Wi-Fi</h2><p>For an already USB-authorized device</p></div></div>
+        <p>This enables legacy ADB over Wi-Fi on <b>{device || "the selected device"}</b> at port 5555, discovers its Wi-Fi IP, and connects it wirelessly.</p>
+        <p className="warning">Keep the device and this Mac on the same network. Disconnecting USB after the wireless connection succeeds is safe.</p>
+        {connectionError && <p className="connection-error">{connectionError}</p>}
+        <button className="primary submit" disabled={connecting || !device} onClick={()=>void submitUsbWifi()}>{connecting ? "Connecting…" : "Enable Wi-Fi connection"}</button>
       </section>
     </div>}
   </main>;

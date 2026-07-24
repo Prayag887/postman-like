@@ -13,3 +13,7 @@ export const clearAndroidProxy = async (serial:string):Promise<void> => invoke("
 export const listTransactions = async ():Promise<HttpTransaction[]> => native() ? invoke("list_transactions",{limit:250,offset:0}) : [];
 export const beginQrPairing = async ():Promise<QrPairingChallenge> => invoke("begin_qr_pairing");
 export const finishQrPairing = async (pairingId:string):Promise<QrPairingResult> => invoke("finish_qr_pairing",{pairingId});
+export const pairWithCode = async (host:string, port:number, pairingCode:string):Promise<QrPairingResult> =>
+  invoke("pair_with_code", { host, port, pairingCode });
+export const enableUsbWifi = async (serial:string, port=5555):Promise<QrPairingResult> =>
+  invoke("enable_usb_wifi", { serial, port });

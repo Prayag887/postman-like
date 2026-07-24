@@ -1,5 +1,6 @@
 use crate::{AdbRunner, DeviceError};
 use qrcode::{QrCode, render::svg};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -26,6 +27,84 @@ pub struct QrPairingChallenge {
 pub struct QrPairingResult {
     pub endpoint: String,
     pub adb_output: String,
+}
+
+pub fn pair_with_code(
+    runner: &dyn AdbRunner,
+    host: &str,
+    port: u16,
+    pairing_code: &str,
+) -> Result<QrPairingResult, DeviceError> {
+    validate_host(host)?;
+    if port == 0 {
+        return Err(DeviceError::Adb(
+            "pairing port must be between 1 and 65535".into(),
+        ));
+    }
+    if pairing_code.len() != 6 || !pairing_code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(DeviceError::Adb(
+            "pairing code must contain exactly six digits".into(),
+        ));
+    }
+    let endpoint = format!("{host}:{port}");
+    let output = runner.run(&["pair", &endpoint, pairing_code])?;
+    if !output.to_ascii_lowercase().contains("successfully paired") {
+        return Err(DeviceError::Adb(output.trim().to_owned()));
+    }
+    Ok(QrPairingResult {
+        endpoint,
+        adb_output: output.trim().to_owned(),
+    })
+}
+
+pub fn enable_usb_wifi(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    port: u16,
+) -> Result<QrPairingResult, DeviceError> {
+    if port == 0 {
+        return Err(DeviceError::Adb(
+            "ADB Wi-Fi port must be between 1 and 65535".into(),
+        ));
+    }
+    runner.run(&["-s", serial, "tcpip", &port.to_string()])?;
+    let routes = runner.run(&["-s", serial, "shell", "ip", "route"])?;
+    let host = parse_wifi_ipv4(&routes).ok_or_else(|| {
+        DeviceError::Adb(
+            "could not determine the device Wi-Fi address; connect manually using its IP".into(),
+        )
+    })?;
+    let endpoint = format!("{host}:{port}");
+    let output = runner.run(&["connect", &endpoint])?;
+    if !output.to_ascii_lowercase().contains("connected") {
+        return Err(DeviceError::Adb(output.trim().to_owned()));
+    }
+    Ok(QrPairingResult {
+        endpoint,
+        adb_output: output.trim().to_owned(),
+    })
+}
+
+fn validate_host(host: &str) -> Result<(), DeviceError> {
+    let valid = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':'));
+    if valid {
+        Ok(())
+    } else {
+        Err(DeviceError::Adb("invalid device host or IP address".into()))
+    }
+}
+
+pub fn parse_wifi_ipv4(routes: &str) -> Option<String> {
+    let expression =
+        Regex::new(r"\bsrc ((?:\d{1,3}\.){3}\d{1,3})\b").expect("valid IP route regex");
+    expression
+        .captures(routes)
+        .and_then(|captures| captures.get(1))
+        .map(|address| address.as_str().to_owned())
 }
 
 pub fn create_qr_pairing() -> Result<(QrPairingChallenge, QrPairingSecret), DeviceError> {
@@ -183,5 +262,30 @@ studio-app-tester-123 _adb-tls-pairing._tcp 192.168.1.4:42891\n";
             parse_mdns_pairing_endpoint(output, "studio-app-tester-123").as_deref(),
             Some("192.168.1.4:42891")
         );
+    }
+
+    #[test]
+    fn parses_the_usb_device_wifi_address() {
+        assert_eq!(
+            parse_wifi_ipv4(
+                "default via 192.168.1.1 dev wlan0 proto dhcp src 192.168.1.44 metric 600"
+            ),
+            Some("192.168.1.44".into())
+        );
+        assert_eq!(parse_wifi_ipv4("unreachable 127.0.0.0/8"), None);
+    }
+
+    #[test]
+    fn rejects_invalid_manual_pairing_values() {
+        struct Unused;
+        impl AdbRunner for Unused {
+            fn run(&self, _: &[&str]) -> Result<String, DeviceError> {
+                panic!("validation should run before ADB")
+            }
+        }
+        let runner = Unused;
+        assert!(pair_with_code(&runner, "host;bad", 37123, "123456").is_err());
+        assert!(pair_with_code(&runner, "192.168.1.5", 0, "123456").is_err());
+        assert!(pair_with_code(&runner, "192.168.1.5", 37123, "abcdef").is_err());
     }
 }
