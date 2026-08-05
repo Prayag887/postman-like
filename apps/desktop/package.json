@@ -15,7 +15,7 @@
   "dependencies": {
     "@chenglou/pretext": "^0.0.8",
     "@tauri-apps/api": "2.11.1",
-    "lucide-svelte": "^0.468.0",
+    "lucide-svelte": "^1.0.1",
     "svelte": "^5.49.2"
   },
   "devDependencies": {
